@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Interactive Leaflet map for tracking played golf courses in Iceland."
+    />
+    <title>Iceland Golf Course Tracker</title>
+
+    <!-- Match the typography used on snorribjarkason.com. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Leaflet map styles. -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <!-- Leaflet.markercluster styles for nearby course clustering. -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+    />
+
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app-shell" id="appShell">
+      <div
+        id="map"
+        class="map"
+        role="application"
+        aria-label="Interactive map of Icelandic golf courses"
+      ></div>
+
+      <button
+        class="sidebar-toggle"
+        id="sidebarToggle"
+        type="button"
+        aria-controls="sidebar"
+        aria-expanded="true"
+      >
+        Hide panel
+      </button>
+
+      <aside class="sidebar" id="sidebar" aria-label="Golf tracker controls">
+        <header class="sidebar-header">
+          <div>
+            <p class="eyebrow">Iceland</p>
+            <h1>Golf Course Tracker</h1>
+          </div>
+          <button
+            class="theme-toggle"
+            id="themeToggle"
+            type="button"
+            aria-pressed="false"
+          >
+            Dark
+          </button>
+        </header>
+
+        <section class="stats-grid" aria-label="Progress summary">
+          <article class="stat-card">
+            <span class="stat-label">Total courses</span>
+            <strong class="stat-value" id="totalCourses">0</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Played</span>
+            <strong class="stat-value" id="playedCourses">0</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Completed</span>
+            <strong class="stat-value" id="completionPercent">0%</strong>
+          </article>
+        </section>
+
+        <section class="controls" aria-label="Course search and filters">
+          <label class="search-label" for="courseSearch">Search</label>
+          <input
+            id="courseSearch"
+            class="search-input"
+            type="search"
+            autocomplete="off"
+            placeholder="Course or club name"
+          />
+
+          <div class="filter-tabs" role="group" aria-label="Status filter">
+            <button class="filter-button is-active" type="button" data-filter="all">
+              All
+            </button>
+            <button class="filter-button" type="button" data-filter="played">
+              Played
+            </button>
+            <button class="filter-button" type="button" data-filter="unplayed">
+              Unplayed
+            </button>
+          </div>
+
+        </section>
+
+        <section class="legend" aria-label="Marker legend">
+          <h2>Legend</h2>
+          <div class="legend-row">
+            <span class="legend-dot legend-dot-unplayed"></span>
+            <span>Not played</span>
+          </div>
+          <div class="legend-row">
+            <span class="legend-dot legend-dot-played"></span>
+            <span>Played</span>
+          </div>
+        </section>
+
+        <footer class="app-footer">
+          <span>Total courses loaded: <strong id="footerTotal">0</strong></span>
+          <span>Last updated: <strong id="lastUpdated">Not loaded</strong></span>
+        </footer>
+      </aside>
+
+      <section
+        class="loading-overlay"
+        id="loadingOverlay"
+        aria-live="polite"
+        aria-label="Loading courses"
+      >
+        <div class="loading-panel">
+          <div class="spinner" aria-hidden="true"></div>
+          <h2 id="loadingTitle">Loading courses</h2>
+          <p id="loadingText">Preparing map data</p>
+          <div class="progress-track" aria-hidden="true">
+            <span class="progress-bar" id="loadingProgress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section
+        class="rating-modal is-hidden"
+        id="ratingModal"
+        aria-modal="true"
+        role="dialog"
+        aria-labelledby="ratingModalTitle"
+      >
+        <form class="rating-dialog" id="ratingForm">
+          <header class="rating-header">
+            <div>
+              <p class="eyebrow">Played details</p>
+              <h2 id="ratingModalTitle">Rate this course</h2>
+              <p id="ratingCourseName" class="rating-course-name"></p>
+            </div>
+          </header>
+
+          <div class="rating-fields">
+            <label class="rating-field">
+              <span>My rating</span>
+              <select id="modalRating" name="rating"></select>
+            </label>
+
+            <label class="rating-field">
+              <span>Course condition</span>
+              <select id="modalCondition" name="condition"></select>
+            </label>
+
+            <label class="rating-field">
+              <span>Weather condition</span>
+              <select id="modalWeather" name="weather"></select>
+            </label>
+          </div>
+
+          <footer class="rating-actions">
+            <button class="secondary-action" id="ratingCancel" type="button">
+              Later
+            </button>
+            <button class="primary-action" type="submit">Save</button>
+          </footer>
+        </form>
+      </section>
+    </main>
+
+    <!-- Runtime dependencies. Keep app.js last so the globals are available. -->
+    <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script
+      defer
+      src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"
+    ></script>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"
+    ></script>
+    <script defer src="app.js"></script>
+  </body>
+</html>
