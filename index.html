@@ -51,7 +51,12 @@
         aria-controls="sidebar"
         aria-expanded="true"
       >
-        Hide panel
+        <span class="sidebar-toggle-label">Hide panel</span>
+        <span class="hamburger-icon" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
       </button>
 
       <aside class="sidebar" id="sidebar" aria-label="Golf tracker controls">
@@ -128,6 +133,13 @@
       </aside>
 
       <section
+        class="course-detail-panel is-hidden"
+        id="courseDetailPanel"
+        aria-label="Course details"
+        aria-hidden="true"
+      ></section>
+
+      <section
         class="loading-overlay"
         id="loadingOverlay"
         aria-live="polite"
@@ -191,10 +203,6 @@
     <script
       defer
       src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"
-    ></script>
-    <script
-      defer
-      src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"
     ></script>
     <script defer src="app.js"></script>
   </body>

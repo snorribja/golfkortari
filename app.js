@@ -1,36 +1,35 @@
 // Core data source. Keeping this as a relative path makes the app work on
 // GitHub Pages as long as the CSV sits beside index.html.
-const CSV_FILE = "iceland_golf_courses.csv";
+const CSV_FILE = "golfbox_iceland_clubs.csv";
 
 // localStorage keys are versioned so future data shape changes can migrate
 // cleanly without breaking existing users.
 const PLAYED_STORAGE_KEY = "icelandGolfCourses.played.v1";
 const USER_DATA_STORAGE_KEY = "icelandGolfCourses.userData.v1";
-const LOCATION_CACHE_STORAGE_KEY = "icelandGolfCourses.locationCache.v1";
 const THEME_STORAGE_KEY = "icelandGolfCourses.theme.v1";
 
-// Public Nominatim geocoding is used only for the provided Location address.
-// Results are cached so repeated visits do not geocode the same address again.
-const NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search";
-const NOMINATIM_DELAY_MS = 1100;
-const NOMINATIM_TIMEOUT_MS = 9000;
-
-// The CSV contract requested for the app. These names are also used in the
-// popup so every field from the file is represented in the interface.
+// The GolfBox CSV contract. These names are also used to normalize the raw
+// rows so every field from the file can be represented in the interface.
 const CSV_COLUMNS = [
-  "Course Name",
-  "Club Name",
-  "Location",
-  "Holes",
-  "Par",
-  "Course Rating (Men)",
-  "Slope Rating (Men)",
-  "Course Rating (Women)",
-  "Slope Rating (Women)",
-  "Source URL",
+  "club_name",
+  "club_number_gsi",
+  "course_name",
+  "location",
+  "address",
+  "postal_code",
+  "town",
+  "email",
+  "phone",
+  "website",
+  "holes",
+  "par",
+  "latitude",
+  "longitude",
+  "source_url",
+  "scraped_at",
 ];
 
-// Broad coordinate bounds for validating geocoder results in Iceland.
+// Broad coordinate bounds for validating CSV results in Iceland.
 const ICELAND_LIMITS = {
   minLat: 63.0,
   maxLat: 67.0,
@@ -47,12 +46,11 @@ const state = {
   markers: new Map(),
   played: readJsonStorage(PLAYED_STORAGE_KEY, {}),
   userData: readJsonStorage(USER_DATA_STORAGE_KEY, {}),
-  locationCache: readJsonStorage(LOCATION_CACHE_STORAGE_KEY, {}),
   activeFilter: "all",
   searchTerm: "",
   skippedLocations: [],
-  lastGeocodeAt: 0,
   activeRatingCourseKey: null,
+  activeDetailCourseKey: null,
   hasFitInitialBounds: false,
 };
 
@@ -63,6 +61,7 @@ document.addEventListener("DOMContentLoaded", init);
 async function init() {
   cacheElements();
   applyInitialTheme();
+  applyInitialSidebarState();
 
   try {
     assertDependencies();
@@ -71,12 +70,12 @@ async function init() {
     updateLoading("Loading course CSV", 8);
 
     const rawRows = await loadCoursesFromCsv();
-    state.courses = normalizeAndDedupeCourses(rawRows);
+    state.courses = normalizeCourses(rawRows);
     updateStats();
     updateFooter();
 
-    hideLoading("Courses loaded");
     resolveCourseLocations();
+    hideLoading("Courses loaded");
   } catch (error) {
     console.error("Failed to initialize the golf tracker:", error);
     showFatalError(error);
@@ -86,7 +85,14 @@ async function init() {
 function cacheElements() {
   elements.appShell = document.getElementById("appShell");
   elements.sidebarToggle = document.getElementById("sidebarToggle");
+  elements.sidebarToggleLabel = elements.sidebarToggle.querySelector(".sidebar-toggle-label");
+  if (!elements.sidebarToggleLabel) {
+    elements.sidebarToggleLabel = document.createElement("span");
+    elements.sidebarToggleLabel.className = "sidebar-toggle-label";
+    elements.sidebarToggle.prepend(elements.sidebarToggleLabel);
+  }
   elements.themeToggle = document.getElementById("themeToggle");
+  elements.courseDetailPanel = document.getElementById("courseDetailPanel") || createCourseDetailPanel();
   elements.totalCourses = document.getElementById("totalCourses");
   elements.playedCourses = document.getElementById("playedCourses");
   elements.completionPercent = document.getElementById("completionPercent");
@@ -110,10 +116,6 @@ function cacheElements() {
 function assertDependencies() {
   if (!window.L) {
     throw new Error("Leaflet failed to load. Check the Leaflet CDN link.");
-  }
-
-  if (!window.Papa) {
-    throw new Error("PapaParse failed to load. Check the PapaParse CDN link.");
   }
 
   if (!window.L.markerClusterGroup) {
@@ -142,25 +144,68 @@ function initializeMap() {
   state.markerCluster = L.markerClusterGroup({
     maxClusterRadius: 48,
     showCoverageOnHover: false,
-    spiderfyOnMaxZoom: false,
+    zoomToBoundsOnClick: false,
+    spiderfyOnMaxZoom: true,
     disableClusteringAtZoom: 13,
     iconCreateFunction: createClusterIcon,
   });
 
   state.map.addLayer(state.markerCluster);
+  state.markerCluster.on("click", (event) => {
+    const layer = event.layer;
+    const courseKey = layer?.options?.courseKey;
+    const course = state.courses.find((item) => item.key === courseKey);
+    if (course) {
+      openCourseDetails(course);
+      return;
+    }
+
+    if (layer?.getAllChildMarkers) {
+      const childMarkers = layer.getAllChildMarkers();
+      if (childMarkers.length === 1) {
+        const childCourse = state.courses.find(
+          (item) => item.key === childMarkers[0].options.courseKey,
+        );
+        if (childCourse) {
+          childMarkers[0].openPopup();
+          openCourseDetails(childCourse);
+        }
+        return;
+      }
+
+      if (state.map.getZoom() >= state.map.getMaxZoom() - 1 && layer.spiderfy) {
+        layer.spiderfy();
+      } else if (layer.getBounds) {
+        state.map.fitBounds(layer.getBounds().pad(0.18), { maxZoom: 13 });
+      }
+    }
+  });
+}
+
+function createCourseDetailPanel() {
+  const panel = document.createElement("section");
+  panel.className = "course-detail-panel is-hidden";
+  panel.id = "courseDetailPanel";
+  panel.setAttribute("aria-label", "Course details");
+  panel.setAttribute("aria-hidden", "true");
+  elements.appShell.append(panel);
+  return panel;
 }
 
 function bindUiEvents() {
   state.map.on("popupopen", (event) => {
-    bindPopupControls(event.popup.getElement());
+    bindCourseDetailControls(event.popup.getElement());
   });
 
   populateRatingOptions();
+  updateSidebarToggleLabel();
+  const mobileLayoutQuery = window.matchMedia?.("(max-width: 760px)");
+  mobileLayoutQuery?.addEventListener?.("change", handleSidebarLayoutChange);
 
   elements.sidebarToggle.addEventListener("click", () => {
     const isCollapsed = elements.appShell.classList.toggle("sidebar-collapsed");
     elements.sidebarToggle.setAttribute("aria-expanded", String(!isCollapsed));
-    elements.sidebarToggle.textContent = isCollapsed ? "Show panel" : "Hide panel";
+    updateSidebarToggleLabel();
 
     // Leaflet needs an explicit size refresh after layout changes.
     window.setTimeout(() => state.map?.invalidateSize(), 240);
@@ -191,6 +236,39 @@ function bindUiEvents() {
   elements.ratingForm.addEventListener("submit", saveRatingModal);
 }
 
+function applyInitialSidebarState() {
+  if (isMobileLayout()) {
+    elements.appShell.classList.add("sidebar-collapsed");
+    elements.sidebarToggle.setAttribute("aria-expanded", "false");
+  }
+}
+
+function handleSidebarLayoutChange(event) {
+  elements.appShell.classList.toggle("sidebar-collapsed", event.matches);
+  elements.sidebarToggle.setAttribute("aria-expanded", String(!event.matches));
+  updateSidebarToggleLabel();
+  window.setTimeout(() => state.map?.invalidateSize(), 240);
+}
+
+function updateSidebarToggleLabel() {
+  const isCollapsed = elements.appShell.classList.contains("sidebar-collapsed");
+  const isMobile = isMobileLayout();
+
+  elements.sidebarToggleLabel.textContent = isMobile
+    ? ""
+    : isCollapsed
+      ? "Show panel"
+      : "Hide panel";
+  elements.sidebarToggle.setAttribute(
+    "aria-label",
+    isCollapsed ? "Show course controls" : "Hide course controls",
+  );
+}
+
+function isMobileLayout() {
+  return window.matchMedia?.("(max-width: 760px)")?.matches ?? false;
+}
+
 function applyInitialTheme() {
   const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
   setTheme(savedTheme || "dark", false);
@@ -206,96 +284,224 @@ function setTheme(theme, shouldPersist = true) {
   }
 }
 
-function loadCoursesFromCsv() {
-  return new Promise((resolve, reject) => {
-    Papa.parse(CSV_FILE, {
-      download: true,
-      header: true,
-      skipEmptyLines: "greedy",
-      transformHeader: (header) => header.replace(/^\uFEFF/, "").trim(),
-      complete: (result) => {
-        if (result.errors.length) {
-          console.warn("CSV parsing warnings:", result.errors);
-        }
+async function loadCoursesFromCsv() {
+  const response = await fetch(CSV_FILE);
+  if (!response.ok) {
+    throw new Error(`Could not load ${CSV_FILE}: HTTP ${response.status}`);
+  }
 
-        resolve(result.data);
-      },
-      error: (error) => reject(error),
-    });
-  });
+  return parseCsv(await response.text());
 }
 
-function normalizeAndDedupeCourses(rows) {
-  const seenCourseNames = new Set();
-  const courses = [];
+function parseCsv(csvText) {
+  const rows = parseCsvRows(csvText);
+  if (!rows.length) {
+    return [];
+  }
 
-  rows.forEach((row, index) => {
+  const headers = rows.shift().map((header) => header.replace(/^\uFEFF/, "").trim());
+  return rows
+    .filter((row) => row.some((cell) => cleanCell(cell)))
+    .map((row) =>
+      headers.reduce((record, header, index) => {
+        record[header] = cleanCell(row[index]);
+        return record;
+      }, {}),
+    );
+}
+
+function parseCsvRows(csvText) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < csvText.length; index += 1) {
+    const char = csvText[index];
+    const nextChar = csvText[index + 1];
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function normalizeCourses(rows) {
+  const normalizedRows = rows.map((row) => {
     const normalized = {};
     CSV_COLUMNS.forEach((column) => {
       normalized[column] = readCsvCell(row, column);
     });
 
-    const courseName = normalized["Course Name"];
-    if (!courseName) {
-      console.warn("Skipping CSV row without a course name:", row);
-      return;
-    }
+    return normalized;
+  });
 
-    // The requested unique key is the course name. If the CSV ever contains
-    // duplicates, the first row wins and a second marker is not created.
-    if (seenCourseNames.has(courseName)) {
-      console.warn(`Skipping duplicate course marker for "${courseName}".`);
-      return;
-    }
+  const courseNameCounts = normalizedRows.reduce((counts, normalized) => {
+    const courseName = displayCourseName(normalized);
+    counts.set(courseName, (counts.get(courseName) || 0) + 1);
+    return counts;
+  }, new Map());
 
-    seenCourseNames.add(courseName);
+  const courses = normalizedRows.map((normalized, index) => {
+    const courseName = displayCourseName(normalized);
+    const csvCoordinates = parseCsvCoordinates(normalized.latitude, normalized.longitude);
 
-    courses.push({
-      key: courseName,
+    return {
+      key: courseKey(courseName, normalized, courseNameCounts.get(courseName), index),
       rowIndex: index,
       raw: normalized,
       courseName,
-      clubName: normalized["Club Name"],
-      location: normalized.Location,
-      holes: normalized["Holes"],
-      par: normalized["Par"],
-      ratingMen: normalized["Course Rating (Men)"],
-      slopeMen: normalized["Slope Rating (Men)"],
-      ratingWomen: normalized["Course Rating (Women)"],
-      slopeWomen: normalized["Slope Rating (Women)"],
-      sourceUrl: normalized["Source URL"],
-      searchText: `${courseName} ${normalized["Club Name"]} ${normalized.Location}`.toLowerCase(),
+      clubName: normalized.club_name,
+      clubNumber: normalized.club_number_gsi,
+      location: displayLocation(normalized),
+      address: normalized.address,
+      postalCode: normalized.postal_code,
+      town: normalized.town,
+      email: normalized.email,
+      phone: normalized.phone,
+      website: normalized.website,
+      holes: normalized.holes,
+      par: normalized.par,
+      csvLat: csvCoordinates?.lat ?? null,
+      csvLng: csvCoordinates?.lng ?? null,
+      coordinateOffset: { lat: 0, lng: 0 },
+      coordinateGroupSize: 1,
+      searchText: [
+        courseName,
+        normalized.club_name,
+        normalized.club_number_gsi,
+        normalized.location,
+        normalized.address,
+        normalized.postal_code,
+        normalized.town,
+        normalized.email,
+        normalized.phone,
+        normalized.website,
+      ]
+        .join(" ")
+        .toLowerCase(),
       lat: null,
       lng: null,
       hasLocation: false,
-    });
+    };
   });
 
+  assignCoordinateOffsets(courses);
   return courses;
 }
 
-async function resolveCourseLocations() {
+function displayCourseName(normalized) {
+  return cleanCell(normalized.course_name) || cleanCell(normalized.club_name) || "Unnamed course";
+}
+
+function courseKey(courseName, normalized, courseNameCount, index) {
+  if (courseNameCount === 1 && courseName !== "Unnamed course") {
+    return courseName;
+  }
+
+  const clubIdentifier = normalized.club_number_gsi || normalized.club_name || `row-${index + 1}`;
+  const courseIdentifier = normalized.course_name || courseName || "course";
+  return `${clubIdentifier}::${courseIdentifier}::${index + 1}`;
+}
+
+function formatCourseLocation(normalized) {
+  const townLine = [normalized.postal_code, normalized.town].filter(Boolean).join(" ");
+  return [normalized.address, townLine].filter(Boolean).join(", ");
+}
+
+function displayLocation(normalized) {
+  return cleanCell(normalized.location) || formatCourseLocation(normalized);
+}
+
+function assignCoordinateOffsets(courses) {
+  const groups = new Map();
+
+  courses.forEach((course) => {
+    if (!isValidIcelandCoordinate(course.csvLat, course.csvLng)) {
+      return;
+    }
+
+    const key = coordinateGroupKey(course.csvLat, course.csvLng);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+
+    groups.get(key).push(course);
+  });
+
+  groups.forEach((group) => {
+    if (group.length < 2) {
+      return;
+    }
+
+    const radiusMeters = Math.min(230, 70 + group.length * 18);
+    const degreesPerMeter = 1 / 111320;
+
+    group.forEach((course, index) => {
+      const angle = -Math.PI / 2 + (index / group.length) * Math.PI * 2;
+      const lngScale = Math.max(Math.cos((course.csvLat * Math.PI) / 180), 0.2);
+
+      course.coordinateOffset = {
+        lat: Math.sin(angle) * radiusMeters * degreesPerMeter,
+        lng: (Math.cos(angle) * radiusMeters * degreesPerMeter) / lngScale,
+      };
+      course.coordinateGroupSize = group.length;
+    });
+  });
+}
+
+function coordinateGroupKey(lat, lng) {
+  return `${lat.toFixed(7)}|${lng.toFixed(7)}`;
+}
+
+function resolveCourseLocations() {
   try {
     state.skippedLocations = [];
-    updateLoading("Reading course locations", 24);
+    state.markerCluster.clearLayers();
+    updateLoading("Plotting course coordinates", 72);
 
-    for (const [index, course] of state.courses.entries()) {
-      const progress = 24 + (index / Math.max(state.courses.length, 1)) * 56;
-      updateLoading(
-        `Resolving ${index + 1} of ${state.courses.length}`,
-        progress,
-        course.courseName,
-      );
-
-      const coords = await coordinatesForCourseLocation(course);
+    const visibleMarkers = [];
+    state.courses.forEach((course) => {
+      const coords = coordinatesForCourseLocation(course);
 
       if (coords) {
         course.lat = coords.lat;
         course.lng = coords.lng;
         course.hasLocation = true;
-        createCourseMarker(course);
-        addMarkerIfVisible(course);
-        continue;
+        const marker = createCourseMarker(course);
+        if (marker && courseMatchesCurrentView(course)) {
+          visibleMarkers.push(marker);
+        }
+        return;
       }
 
       course.hasLocation = false;
@@ -304,14 +510,17 @@ async function resolveCourseLocations() {
         club: course.clubName,
         location: course.location || "Missing",
         reason: course.location
-          ? "Address could not be geocoded in Iceland."
-          : "Location address is missing.",
+          ? "Coordinates are missing or invalid."
+          : "Coordinates and address are missing.",
       });
-    }
+    });
+
+    state.markerCluster.addLayers(visibleMarkers);
+    state.markerCluster.refreshClusters();
 
     if (state.skippedLocations.length) {
       console.groupCollapsed(
-        `${state.skippedLocations.length} courses were not mapped because Location is missing or could not be geocoded`,
+        `${state.skippedLocations.length} courses were not mapped because coordinates are missing or invalid`,
       );
       console.table(state.skippedLocations);
       console.groupEnd();
@@ -319,149 +528,37 @@ async function resolveCourseLocations() {
 
     fitMapToMappedCourses();
     updateFooter();
-    updateLoading("Locations resolved", 100);
+    updateLoading("Coordinates resolved", 100);
   } catch (error) {
     console.error("Location resolution failed:", error);
   }
 }
 
-async function coordinatesForCourseLocation(course) {
-  const location = cleanCell(course.location);
-  if (!location) {
-    return null;
-  }
-
-  const embeddedCoordinates = parseEmbeddedCoordinates(location);
-  if (embeddedCoordinates) {
-    return embeddedCoordinates;
-  }
-
-  const cacheKey = locationCacheKey(course);
-  const cached = state.locationCache[cacheKey];
-  if (cached && isValidIcelandCoordinate(cached.lat, cached.lng)) {
-    return cached;
-  }
-
-  const result = await geocodeAddress(location);
-  if (!result) {
-    return null;
-  }
-
-  state.locationCache[cacheKey] = result;
-  writeJsonStorage(LOCATION_CACHE_STORAGE_KEY, state.locationCache);
-  return result;
-}
-
-function parseEmbeddedCoordinates(value) {
-  const candidates = coordinateCandidates(value);
-  return candidates.find((coords) => isValidIcelandCoordinate(coords.lat, coords.lng)) || null;
-}
-
-async function geocodeAddress(location) {
-  await waitForNominatimSlot();
-
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), NOMINATIM_TIMEOUT_MS);
-  const params = new URLSearchParams({
-    q: location,
-    format: "jsonv2",
-    limit: "1",
-    addressdetails: "0",
-    countrycodes: "is",
-  });
-
-  try {
-    const response = await fetch(`${NOMINATIM_ENDPOINT}?${params.toString()}`, {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
+function coordinatesForCourseLocation(course) {
+  if (isValidIcelandCoordinate(course.csvLat, course.csvLng)) {
+    return offsetCoordinates(
+      {
+        lat: course.csvLat,
+        lng: course.csvLng,
       },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Nominatim returned HTTP ${response.status}`);
-    }
-
-    const results = await response.json();
-    const match = results
-      .map((item) => ({
-        lat: Number.parseFloat(item.lat),
-        lng: Number.parseFloat(item.lon),
-      }))
-      .find((coords) => isValidIcelandCoordinate(coords.lat, coords.lng));
-
-    return match || null;
-  } catch (error) {
-    console.warn(`Could not geocode Location address "${location}".`, error);
-    return null;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-}
-
-async function waitForNominatimSlot() {
-  const elapsed = Date.now() - state.lastGeocodeAt;
-  if (elapsed < NOMINATIM_DELAY_MS) {
-    await delay(NOMINATIM_DELAY_MS - elapsed);
+      course.coordinateOffset,
+    );
   }
 
-  state.lastGeocodeAt = Date.now();
+  return null;
 }
 
-function locationCacheKey(course) {
-  return `${course.key}|${cleanCell(course.location).toLowerCase()}`;
-}
-
-function coordinateCandidates(value) {
-  const decodedValue = safeDecodeURIComponent(value);
-  const candidates = [];
-  const numberPattern = "[-+]?\\d{1,3}(?:\\.\\d+)?";
-  const pairPattern = new RegExp(`(${numberPattern})\\s*[,;\\s]\\s*(${numberPattern})`, "g");
-  const googlePattern = new RegExp(`!3d(${numberPattern})!4d(${numberPattern})`, "g");
-  let match = pairPattern.exec(decodedValue);
-
-  while (match) {
-    const first = Number.parseFloat(match[1]);
-    const second = Number.parseFloat(match[2]);
-
-    candidates.push({ lat: first, lng: second });
-    candidates.push({ lat: second, lng: first });
-
-    match = pairPattern.exec(decodedValue);
+function offsetCoordinates(coords, offset) {
+  if (!offset) {
+    return coords;
   }
 
-  match = googlePattern.exec(decodedValue);
-  while (match) {
-    candidates.push({
-      lat: Number.parseFloat(match[1]),
-      lng: Number.parseFloat(match[2]),
-    });
-    match = googlePattern.exec(decodedValue);
-  }
+  const adjusted = {
+    lat: coords.lat + offset.lat,
+    lng: coords.lng + offset.lng,
+  };
 
-  // This also supports common map URLs such as OpenStreetMap #map=15/lat/lng
-  // and Google URLs that encode latitude/longitude as adjacent numeric values.
-  const numbers = decodedValue
-    .match(new RegExp(numberPattern, "g"))
-    ?.map((number) => Number.parseFloat(number));
-
-  numbers?.forEach((first, index) => {
-    const second = numbers[index + 1];
-    if (Number.isFinite(second)) {
-      candidates.push({ lat: first, lng: second });
-      candidates.push({ lat: second, lng: first });
-    }
-  });
-
-  return candidates;
-}
-
-function createCourseMarkers() {
-  state.markers.clear();
-
-  state.courses.forEach((course) => {
-    createCourseMarker(course);
-  });
+  return isValidIcelandCoordinate(adjusted.lat, adjusted.lng) ? adjusted : coords;
 }
 
 function createCourseMarker(course) {
@@ -478,13 +575,7 @@ function createCourseMarker(course) {
     opacity: 0.95,
     className: "course-tooltip",
   });
-
-  marker.bindPopup(buildPopupContent(course), {
-    minWidth: 280,
-    maxWidth: 360,
-    autoPanPadding: [24, 24],
-    className: "course-popup-shell",
-  });
+  marker.bindPopup(buildCourseDetailContent(course), popupOptions());
 
   marker.on("mouseover", () => {
     marker.setStyle({ radius: 10, weight: 4, fillOpacity: 0.98 });
@@ -495,19 +586,25 @@ function createCourseMarker(course) {
     marker.setStyle(markerStyle(course));
     marker.getElement()?.classList.remove("is-hovered");
   });
+  marker.on("click", () => {
+    marker.setPopupContent(buildCourseDetailContent(course));
+    marker.openPopup();
+    window.setTimeout(() => bindCourseDetailControls(marker.getPopup()?.getElement()), 0);
+    openCourseDetails(course);
+  });
 
   state.markers.set(course.key, marker);
   return marker;
 }
 
-function addMarkerIfVisible(course) {
-  const marker = state.markers.get(course.key);
-  if (!marker || !courseMatchesCurrentView(course)) {
-    return;
-  }
-
-  state.markerCluster.addLayer(marker);
-  state.markerCluster.refreshClusters();
+function popupOptions() {
+  return {
+    minWidth: 300,
+    maxWidth: 380,
+    autoPanPaddingTopLeft: isMobileLayout() ? [18, 72] : [430, 24],
+    autoPanPaddingBottomRight: [18, 18],
+    className: "course-popup-shell",
+  };
 }
 
 function markerStyle(course) {
@@ -567,26 +664,65 @@ function createClusterIcon(cluster) {
   });
 }
 
-function bindPopupControls(popupElement) {
-  if (!popupElement) {
+function bindCourseDetailControls(panelElement) {
+  if (!panelElement) {
     return;
   }
 
-  const toggleButton = popupElement.querySelector("[data-action='toggle-played']");
-  toggleButton?.addEventListener("click", () => {
-    const course = state.courses.find((item) => item.key === toggleButton.dataset.courseKey);
-    if (course) {
-      toggleCoursePlayed(course);
-    }
-  });
+  const closeButton = panelElement.querySelector("[data-action='close-details']");
+  if (closeButton && closeButton.dataset.controlsBound !== "true") {
+    closeButton.dataset.controlsBound = "true";
+    closeButton.addEventListener("click", closeCourseDetails);
+  }
 
-  popupElement.querySelectorAll("[data-user-field]").forEach((field) => {
+  const toggleButton = panelElement.querySelector("[data-action='toggle-played']");
+  if (toggleButton && toggleButton.dataset.controlsBound !== "true") {
+    toggleButton.dataset.controlsBound = "true";
+    toggleButton.addEventListener("click", () => {
+      const course = state.courses.find((item) => item.key === toggleButton.dataset.courseKey);
+      if (course) {
+        toggleCoursePlayed(course);
+      }
+    });
+  }
+
+  panelElement.querySelectorAll("[data-user-field]").forEach((field) => {
+    if (field.dataset.controlsBound === "true") {
+      return;
+    }
+
+    field.dataset.controlsBound = "true";
     field.addEventListener("change", () => {
       updateCourseUserData(field.dataset.courseKey, {
         [field.dataset.userField]: field.value,
       });
     });
   });
+}
+
+function openCourseDetails(course) {
+  state.activeDetailCourseKey = course.key;
+  renderCourseDetails(course);
+  elements.courseDetailPanel.classList.remove("is-hidden");
+  elements.courseDetailPanel.setAttribute("aria-hidden", "false");
+
+  if (isMobileLayout()) {
+    elements.appShell.classList.add("sidebar-collapsed");
+    elements.sidebarToggle.setAttribute("aria-expanded", "false");
+    updateSidebarToggleLabel();
+  }
+}
+
+function renderCourseDetails(course) {
+  elements.courseDetailPanel.innerHTML = buildCourseDetailContent(course);
+  bindCourseDetailControls(elements.courseDetailPanel);
+}
+
+function closeCourseDetails() {
+  state.activeDetailCourseKey = null;
+  elements.courseDetailPanel.classList.add("is-hidden");
+  elements.courseDetailPanel.setAttribute("aria-hidden", "true");
+  elements.courseDetailPanel.innerHTML = "";
 }
 
 function toggleCoursePlayed(course) {
@@ -602,13 +738,14 @@ function toggleCoursePlayed(course) {
   updateMarkerAppearance(course);
   updateStats();
 
-  const marker = state.markers.get(course.key);
   if (courseMatchesCurrentView(course)) {
     state.markerCluster.refreshClusters();
-    marker?.openPopup();
-    window.setTimeout(() => bindPopupControls(marker?.getPopup()?.getElement()), 0);
   } else {
     renderVisibleMarkers();
+  }
+
+  if (state.activeDetailCourseKey === course.key) {
+    renderCourseDetails(course);
   }
 
   if (nextPlayed) {
@@ -623,7 +760,10 @@ function updateMarkerAppearance(course) {
   }
 
   marker.setStyle(markerStyle(course));
-  marker.setPopupContent(buildPopupContent(course));
+  marker.setPopupContent(buildCourseDetailContent(course));
+  if (marker.getPopup()?.isOpen()) {
+    bindCourseDetailControls(marker.getPopup().getElement());
+  }
 
   const markerElement = marker.getElement();
   if (markerElement) {
@@ -641,10 +781,16 @@ function updateCourseUserData(courseKey, updates) {
   writeJsonStorage(USER_DATA_STORAGE_KEY, state.userData);
 
   const course = state.courses.find((item) => item.key === courseKey);
+  if (course && state.activeDetailCourseKey === courseKey) {
+    renderCourseDetails(course);
+  }
+
   const marker = state.markers.get(courseKey);
   if (course && marker) {
-    marker.setPopupContent(buildPopupContent(course));
-    window.setTimeout(() => bindPopupControls(marker.getPopup()?.getElement()), 0);
+    marker.setPopupContent(buildCourseDetailContent(course));
+    if (marker.getPopup()?.isOpen()) {
+      bindCourseDetailControls(marker.getPopup().getElement());
+    }
   }
 }
 
@@ -715,7 +861,7 @@ function fitMapToMappedCourses() {
     .map((course) => L.latLng(course.lat, course.lng));
 
   if (!latLngs.length) {
-    console.warn("No courses were mapped because no Location addresses could be resolved.");
+    console.warn("No courses were mapped because no valid coordinates or address matches were found.");
     return;
   }
 
@@ -743,83 +889,145 @@ function updateFooter() {
   }).format(new Date());
 }
 
-function buildPopupContent(course) {
+function buildCourseDetailContent(course) {
   const played = isCoursePlayed(course.key);
   const userData = getCourseUserData(course.key);
-  const safeUrl = safeHttpUrl(course.sourceUrl);
-  const sourceMarkup = safeUrl
-    ? `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(course.sourceUrl)}</a>`
-    : "Not available";
   const courseKeyAttribute = escapeAttribute(course.key);
+  const toggleLabel = played ? "Mark unplayed" : "Mark played";
 
   return `
-    <article class="course-popup">
-      <header class="popup-header">
-        <div>
-          <h3>${escapeHtml(course.courseName)}</h3>
-          <p class="popup-club">${escapeHtml(displayValue(course.clubName))}</p>
+    <article class="course-detail">
+      <header class="course-detail-hero">
+        <button class="detail-close" type="button" data-action="close-details" aria-label="Close course details">
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </button>
+        <div class="course-detail-heading">
+          <p class="course-detail-eyebrow">${escapeHtml(displayValue(course.clubName))}</p>
+          <h2>${escapeHtml(course.courseName)}</h2>
+          <p class="course-detail-location">${escapeHtml(displayValue(course.location))}</p>
         </div>
-        <span class="status-pill ${played ? "is-played" : "is-unplayed"}">
+        <span class="course-detail-status ${played ? "is-played" : "is-unplayed"}">
           ${played ? "Played" : "Not played"}
         </span>
       </header>
 
+      <section class="detail-metrics" aria-label="Course summary">
+        ${metricMarkup("Club #", course.clubNumber)}
+        ${metricMarkup("Holes", course.holes)}
+        ${metricMarkup("Par", course.par)}
+      </section>
+
       <button
-        class="played-toggle-popup ${played ? "is-played" : "is-unplayed"}"
+        class="detail-play-toggle ${played ? "is-played" : "is-unplayed"}"
         type="button"
         data-action="toggle-played"
         data-course-key="${courseKeyAttribute}"
       >
-        ${played ? "Mark unplayed" : "Mark played"}
+        <span class="play-toggle-icon" aria-hidden="true"></span>
+        <span>${toggleLabel}</span>
       </button>
 
-      <section class="popup-card popup-grid" aria-label="Course details">
-        ${detailMarkup("Holes", course.holes)}
-        ${detailMarkup("Par", course.par)}
-        ${detailMarkup("Location", course.location)}
-        ${detailMarkup("Played status", played ? "Played" : "Not played")}
-      </section>
-
-      <section class="popup-card popup-grid" aria-label="Course ratings">
-        ${detailMarkup("Course Rating (Men)", course.ratingMen)}
-        ${detailMarkup("Slope Rating (Men)", course.slopeMen)}
-        ${detailMarkup("Course Rating (Women)", course.ratingWomen)}
-        ${detailMarkup("Slope Rating (Women)", course.slopeWomen)}
-      </section>
-
-      <section class="popup-card popup-grid" aria-label="Source">
-        ${detailMarkup("Course Name", course.courseName)}
-        ${detailMarkup("Club Name", course.clubName)}
-        <div class="detail is-full">
-          <span class="detail-label">Source URL</span>
-          <span class="detail-value">${sourceMarkup}</span>
+      <section class="detail-section" aria-label="Contact details">
+        <header class="detail-section-header">
+          <h3>Contact</h3>
+        </header>
+        <div class="detail-list">
+          ${contactDetailListMarkup(course)}
         </div>
       </section>
 
-      <section class="popup-card personal-card" aria-label="Personal course notes">
-        <label class="popup-field">
-          <span class="detail-label">My rating</span>
-          <select data-user-field="rating" data-course-key="${courseKeyAttribute}">
-            ${numberOptionMarkup("Not rated", userData.rating)}
-          </select>
-        </label>
+      <section class="detail-section detail-notes" aria-label="Personal course notes">
+        <header class="detail-section-header">
+          <h3>My Notes</h3>
+        </header>
+        <div class="detail-field-grid">
+          <label class="detail-field">
+            <span class="detail-label">My rating</span>
+            <select data-user-field="rating" data-course-key="${courseKeyAttribute}">
+              ${numberOptionMarkup("Not rated", userData.rating)}
+            </select>
+          </label>
 
-        <label class="popup-field">
-          <span class="detail-label">Course condition</span>
-          <select data-user-field="condition" data-course-key="${courseKeyAttribute}">
-            ${numberOptionMarkup("Not recorded", userData.condition)}
-          </select>
-        </label>
+          <label class="detail-field">
+            <span class="detail-label">Course condition</span>
+            <select data-user-field="condition" data-course-key="${courseKeyAttribute}">
+              ${numberOptionMarkup("Not recorded", userData.condition)}
+            </select>
+          </label>
 
-        <label class="popup-field">
-          <span class="detail-label">Weather condition</span>
-          <select data-user-field="weather" data-course-key="${courseKeyAttribute}">
-            ${numberOptionMarkup("Not recorded", userData.weather)}
-          </select>
-        </label>
+          <label class="detail-field">
+            <span class="detail-label">Weather condition</span>
+            <select data-user-field="weather" data-course-key="${courseKeyAttribute}">
+              ${numberOptionMarkup("Not recorded", userData.weather)}
+            </select>
+          </label>
+        </div>
       </section>
     </article>
   `;
+}
+
+function metricMarkup(label, value) {
+  return `
+    <div class="detail-metric">
+      <span class="metric-label">${escapeHtml(label)}</span>
+      <strong class="metric-value">${escapeHtml(displayValue(value))}</strong>
+    </div>
+  `;
+}
+
+function contactDetailListMarkup(course) {
+  const details = [
+    optionalDetailMarkup("Address", cleanCell(course.address) || cleanCell(course.location)),
+    optionalDetailMarkup("Postal Code", course.postalCode),
+    optionalDetailMarkup("Town", course.town),
+    optionalDetailMarkup("Email", course.email),
+    optionalDetailMarkup("Phone", course.phone),
+    websiteDetailMarkup(course.website),
+  ].filter(Boolean);
+
+  return details.length
+    ? details.join("")
+    : '<p class="empty-detail">Not available</p>';
+}
+
+function optionalDetailMarkup(label, value) {
+  return cleanCell(value) ? detailMarkup(label, value) : "";
+}
+
+function websiteDetailMarkup(value) {
+  const safeUrl = safeHttpUrl(value);
+  if (!safeUrl) {
+    return "";
+  }
+
+  return `
+    <div class="detail is-full">
+      <span class="detail-label">Website</span>
+      <span class="detail-value">${linkMarkup(value, websiteDisplayLabel(value))}</span>
+    </div>
+  `;
+}
+
+function linkMarkup(value, label = value) {
+  const safeUrl = safeHttpUrl(value);
+  return safeUrl
+    ? `<a href="${escapeAttribute(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+    : escapeHtml(displayValue(value));
+}
+
+function websiteDisplayLabel(value) {
+  const safeUrl = safeHttpUrl(value);
+  if (!safeUrl) {
+    return displayValue(value);
+  }
+
+  try {
+    return new URL(safeUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return displayValue(value);
+  }
 }
 
 function detailMarkup(label, value) {
@@ -889,6 +1097,18 @@ function readCsvCell(row, preferredColumnName) {
   return matchingKey ? cleanCell(row[matchingKey]) : "";
 }
 
+function parseCsvCoordinates(latitude, longitude) {
+  const lat = parseFiniteNumber(latitude);
+  const lng = parseFiniteNumber(longitude);
+
+  return isValidIcelandCoordinate(lat, lng) ? { lat, lng } : null;
+}
+
+function parseFiniteNumber(value) {
+  const number = Number.parseFloat(cleanCell(value));
+  return Number.isFinite(number) ? number : null;
+}
+
 function displayValue(value) {
   return cleanCell(value) || "Not available";
 }
@@ -899,14 +1119,6 @@ function safeHttpUrl(value) {
     return ["http:", "https:"].includes(url.protocol) ? url.href : "";
   } catch {
     return "";
-  }
-}
-
-function safeDecodeURIComponent(value) {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
   }
 }
 
@@ -950,10 +1162,4 @@ function isValidIcelandCoordinate(lat, lng) {
     lng >= ICELAND_LIMITS.minLng &&
     lng <= ICELAND_LIMITS.maxLng
   );
-}
-
-function delay(ms) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
 }
