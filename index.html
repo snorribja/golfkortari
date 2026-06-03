@@ -75,6 +75,52 @@
           </button>
         </header>
 
+        <section class="account-panel" id="accountPanel" aria-label="Account">
+          <div class="account-summary">
+            <span class="account-avatar" id="accountAvatar" aria-hidden="true">G</span>
+            <div class="account-copy">
+              <strong id="accountName">Guest</strong>
+              <span id="accountEmail">Map access only</span>
+            </div>
+          </div>
+
+          <div class="account-actions" id="guestAccountActions">
+            <button class="secondary-action" id="openLogin" type="button">
+              Sign in
+            </button>
+            <button class="primary-action" id="openRegister" type="button">
+              Register
+            </button>
+          </div>
+
+          <div class="account-actions is-hidden" id="userAccountActions">
+            <button class="secondary-action" id="openProfile" type="button">
+              Profile
+            </button>
+            <button class="secondary-action" id="signOutButton" type="button">
+              Log out
+            </button>
+          </div>
+
+          <div
+            class="verification-panel is-hidden"
+            id="verificationPanel"
+            aria-live="polite"
+          >
+            <span id="verificationText">Verify your email to save progress.</span>
+            <div class="verification-actions">
+              <button class="secondary-action" id="resendVerification" type="button">
+                Resend
+              </button>
+              <button class="secondary-action" id="refreshVerification" type="button">
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <p class="account-notice" id="accountNotice" aria-live="polite"></p>
+        </section>
+
         <section class="stats-grid" aria-label="Progress summary">
           <article class="stat-card">
             <span class="stat-label">Total courses</span>
@@ -146,6 +192,179 @@
             <span class="progress-bar" id="loadingProgress"></span>
           </div>
         </div>
+      </section>
+
+      <section
+        class="auth-modal is-hidden"
+        id="authModal"
+        aria-modal="true"
+        role="dialog"
+        aria-labelledby="authTitle"
+      >
+        <form class="auth-dialog" id="authForm" novalidate>
+          <header class="form-header">
+            <div>
+              <p class="eyebrow" id="authEyebrow">Account</p>
+              <h2 id="authTitle">Sign in</h2>
+            </div>
+            <button
+              class="form-close"
+              id="authClose"
+              type="button"
+              aria-label="Close account form"
+            >
+              <span aria-hidden="true"></span>
+              <span aria-hidden="true"></span>
+            </button>
+          </header>
+
+          <div class="auth-fields">
+            <label class="form-field is-hidden" id="authDisplayNameField">
+              <span>Display name</span>
+              <input
+                id="authDisplayName"
+                name="displayName"
+                type="text"
+                autocomplete="name"
+                maxlength="80"
+              />
+            </label>
+
+            <label class="form-field">
+              <span>Email</span>
+              <input
+                id="authEmail"
+                name="email"
+                type="email"
+                autocomplete="email"
+                required
+              />
+            </label>
+
+            <label class="form-field">
+              <span>Password</span>
+              <input
+                id="authPassword"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                minlength="8"
+                required
+              />
+            </label>
+          </div>
+
+          <p class="form-message" id="authMessage" aria-live="polite"></p>
+
+          <div class="form-actions">
+            <button class="primary-action" id="authSubmit" type="submit">
+              Sign in
+            </button>
+            <button class="secondary-action" id="googleSignIn" type="button">
+              Continue with Google
+            </button>
+          </div>
+
+          <footer class="auth-links">
+            <button id="switchAuthMode" type="button">Create account</button>
+            <button id="forgotPassword" type="button">Reset password</button>
+          </footer>
+        </form>
+      </section>
+
+      <section
+        class="profile-page is-hidden"
+        id="profilePage"
+        aria-label="Profile"
+      >
+        <form class="profile-shell" id="profileForm">
+          <header class="profile-header">
+            <div class="profile-identity">
+              <span class="profile-avatar" id="profileAvatar" aria-hidden="true">G</span>
+              <div>
+                <p class="eyebrow">Profile</p>
+                <h2 id="profileTitle">My profile</h2>
+                <p id="profileSubtitle" class="profile-subtitle"></p>
+              </div>
+            </div>
+            <button
+              class="form-close"
+              id="profileClose"
+              type="button"
+              aria-label="Close profile"
+            >
+              <span aria-hidden="true"></span>
+              <span aria-hidden="true"></span>
+            </button>
+          </header>
+
+          <div class="profile-grid">
+            <label class="form-field">
+              <span>Display name</span>
+              <input
+                id="profileDisplayName"
+                name="displayName"
+                type="text"
+                autocomplete="name"
+                maxlength="80"
+              />
+            </label>
+
+            <label class="form-field">
+              <span>Email</span>
+              <input id="profileEmail" name="email" type="email" readonly />
+            </label>
+
+            <label class="form-field is-full">
+              <span>About</span>
+              <textarea id="profileBio" name="bio" rows="5" maxlength="500"></textarea>
+            </label>
+
+            <label class="form-field">
+              <span>Phone</span>
+              <input
+                id="profilePhone"
+                name="phoneNumber"
+                type="tel"
+                autocomplete="tel"
+                maxlength="40"
+              />
+            </label>
+
+            <label class="form-field">
+              <span>Location</span>
+              <input
+                id="profileLocation"
+                name="location"
+                type="text"
+                autocomplete="address-level2"
+                maxlength="120"
+              />
+            </label>
+          </div>
+
+          <dl class="profile-meta">
+            <div>
+              <dt>Created</dt>
+              <dd id="profileCreatedAt">Not available</dd>
+            </div>
+            <div>
+              <dt>Updated</dt>
+              <dd id="profileUpdatedAt">Not available</dd>
+            </div>
+          </dl>
+
+          <p class="form-message" id="profileMessage" aria-live="polite"></p>
+
+          <footer class="profile-actions">
+            <button class="secondary-action" id="profileCancel" type="button">
+              Close
+            </button>
+            <button class="primary-action" id="profileSave" type="submit">
+              Save profile
+            </button>
+          </footer>
+        </form>
       </section>
 
       <section

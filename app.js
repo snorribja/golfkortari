@@ -7,6 +7,16 @@ const CSV_FILE = "golfbox_iceland_clubs.csv";
 const PLAYED_STORAGE_KEY = "icelandGolfCourses.played.v1";
 const USER_DATA_STORAGE_KEY = "icelandGolfCourses.userData.v1";
 const THEME_STORAGE_KEY = "icelandGolfCourses.theme.v1";
+const FIREBASE_SDK_VERSION = "12.7.0";
+const PRODUCTION_APP_URL = "https://golfkortari.snorribjarkason.com/";
+
+const AUTH_NOTICE_TIMEOUT_MS = 5200;
+const PROFILE_FIELD_LIMITS = {
+  displayName: 80,
+  bio: 500,
+  phoneNumber: 40,
+  location: 120,
+};
 
 // The GolfBox CSV contract. These names are also used to normalize the raw
 // rows so every field from the file can be represented in the interface.
@@ -51,6 +61,21 @@ const state = {
   skippedLocations: [],
   activeRatingCourseKey: null,
   hasFitInitialBounds: false,
+  firebase: {
+    configured: false,
+    ready: false,
+    initError: null,
+    app: null,
+    auth: null,
+    db: null,
+    authApi: null,
+    firestoreApi: null,
+  },
+  authUser: null,
+  profile: null,
+  authMode: "login",
+  authNoticeTimer: null,
+  isProfileLoading: false,
 };
 
 const elements = {};
@@ -61,6 +86,8 @@ async function init() {
   cacheElements();
   applyInitialTheme();
   applyInitialSidebarState();
+  updateAuthUi();
+  initializeFirebaseServices();
 
   try {
     assertDependencies();
@@ -102,6 +129,50 @@ function cacheElements() {
   elements.loadingTitle = document.getElementById("loadingTitle");
   elements.loadingText = document.getElementById("loadingText");
   elements.loadingProgress = document.getElementById("loadingProgress");
+  elements.accountAvatar = document.getElementById("accountAvatar");
+  elements.accountName = document.getElementById("accountName");
+  elements.accountEmail = document.getElementById("accountEmail");
+  elements.guestAccountActions = document.getElementById("guestAccountActions");
+  elements.userAccountActions = document.getElementById("userAccountActions");
+  elements.openLogin = document.getElementById("openLogin");
+  elements.openRegister = document.getElementById("openRegister");
+  elements.openProfile = document.getElementById("openProfile");
+  elements.signOutButton = document.getElementById("signOutButton");
+  elements.verificationPanel = document.getElementById("verificationPanel");
+  elements.verificationText = document.getElementById("verificationText");
+  elements.resendVerification = document.getElementById("resendVerification");
+  elements.refreshVerification = document.getElementById("refreshVerification");
+  elements.accountNotice = document.getElementById("accountNotice");
+  elements.authModal = document.getElementById("authModal");
+  elements.authForm = document.getElementById("authForm");
+  elements.authEyebrow = document.getElementById("authEyebrow");
+  elements.authTitle = document.getElementById("authTitle");
+  elements.authClose = document.getElementById("authClose");
+  elements.authDisplayNameField = document.getElementById("authDisplayNameField");
+  elements.authDisplayName = document.getElementById("authDisplayName");
+  elements.authEmail = document.getElementById("authEmail");
+  elements.authPassword = document.getElementById("authPassword");
+  elements.authMessage = document.getElementById("authMessage");
+  elements.authSubmit = document.getElementById("authSubmit");
+  elements.googleSignIn = document.getElementById("googleSignIn");
+  elements.switchAuthMode = document.getElementById("switchAuthMode");
+  elements.forgotPassword = document.getElementById("forgotPassword");
+  elements.profilePage = document.getElementById("profilePage");
+  elements.profileForm = document.getElementById("profileForm");
+  elements.profileAvatar = document.getElementById("profileAvatar");
+  elements.profileTitle = document.getElementById("profileTitle");
+  elements.profileSubtitle = document.getElementById("profileSubtitle");
+  elements.profileClose = document.getElementById("profileClose");
+  elements.profileDisplayName = document.getElementById("profileDisplayName");
+  elements.profileEmail = document.getElementById("profileEmail");
+  elements.profileBio = document.getElementById("profileBio");
+  elements.profilePhone = document.getElementById("profilePhone");
+  elements.profileLocation = document.getElementById("profileLocation");
+  elements.profileCreatedAt = document.getElementById("profileCreatedAt");
+  elements.profileUpdatedAt = document.getElementById("profileUpdatedAt");
+  elements.profileMessage = document.getElementById("profileMessage");
+  elements.profileCancel = document.getElementById("profileCancel");
+  elements.profileSave = document.getElementById("profileSave");
   elements.ratingModal = document.getElementById("ratingModal");
   elements.ratingForm = document.getElementById("ratingForm");
   elements.ratingCourseName = document.getElementById("ratingCourseName");
@@ -218,6 +289,27 @@ function bindUiEvents() {
     });
   });
 
+  elements.openLogin.addEventListener("click", () => navigateToRoute("login"));
+  elements.openRegister.addEventListener("click", () => navigateToRoute("register"));
+  elements.openProfile.addEventListener("click", () => navigateToRoute("profile"));
+  elements.signOutButton.addEventListener("click", signOutUser);
+  elements.resendVerification.addEventListener("click", resendVerificationEmail);
+  elements.refreshVerification.addEventListener("click", refreshVerificationStatus);
+  elements.authClose.addEventListener("click", closeAuthModal);
+  elements.authForm.addEventListener("submit", handleAuthSubmit);
+  elements.googleSignIn.addEventListener("click", signInWithGoogle);
+  elements.switchAuthMode.addEventListener("click", toggleAuthMode);
+  elements.forgotPassword.addEventListener("click", sendPasswordReset);
+  elements.authModal.addEventListener("click", (event) => {
+    if (event.target === elements.authModal) {
+      closeAuthModal();
+    }
+  });
+  elements.profileClose.addEventListener("click", closeProfilePage);
+  elements.profileCancel.addEventListener("click", closeProfilePage);
+  elements.profileForm.addEventListener("submit", saveProfile);
+  window.addEventListener("hashchange", handleRouteChange);
+
   elements.ratingCancel.addEventListener("click", closeRatingModal);
   elements.ratingModal.addEventListener("click", (event) => {
     if (event.target === elements.ratingModal) {
@@ -225,6 +317,731 @@ function bindUiEvents() {
     }
   });
   elements.ratingForm.addEventListener("submit", saveRatingModal);
+  handleRouteChange();
+}
+
+async function initializeFirebaseServices() {
+  try {
+    const configModule = await import("./firebase-config.js");
+    const firebaseConfig = configModule.firebaseConfig;
+
+    if (!isFirebaseConfigComplete(firebaseConfig)) {
+      state.firebase.ready = true;
+      state.firebase.configured = false;
+      updateAuthUi();
+      return;
+    }
+
+    const sdkBaseUrl = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}`;
+    const [appApi, authApi, firestoreApi] = await Promise.all([
+      import(`${sdkBaseUrl}/firebase-app.js`),
+      import(`${sdkBaseUrl}/firebase-auth.js`),
+      import(`${sdkBaseUrl}/firebase-firestore.js`),
+    ]);
+
+    const firebaseApp = appApi.initializeApp(firebaseConfig);
+    const auth = authApi.getAuth(firebaseApp);
+    const db = firestoreApi.getFirestore(firebaseApp);
+
+    try {
+      await authApi.setPersistence(auth, authApi.browserLocalPersistence);
+    } catch (error) {
+      console.warn("Could not set Firebase auth persistence.", error);
+    }
+
+    state.firebase = {
+      configured: true,
+      ready: true,
+      initError: null,
+      app: firebaseApp,
+      auth,
+      db,
+      authApi,
+      firestoreApi,
+    };
+
+    authApi.onAuthStateChanged(auth, handleAuthStateChanged);
+    updateAuthUi();
+  } catch (error) {
+    state.firebase.ready = true;
+    state.firebase.configured = false;
+    state.firebase.initError = error;
+    console.warn("Firebase failed to initialize.", error);
+    updateAuthUi();
+  }
+}
+
+function isFirebaseConfigComplete(firebaseConfig) {
+  const requiredKeys = ["apiKey", "authDomain", "projectId", "appId"];
+  return requiredKeys.every((key) => {
+    const value = cleanCell(firebaseConfig?.[key]);
+    return value && !value.startsWith("YOUR_");
+  });
+}
+
+async function handleAuthStateChanged(user) {
+  state.authUser = user;
+  state.profile = null;
+  updateAuthUi();
+  refreshCourseDetailViews();
+
+  if (!canUsePrivateFeatures()) {
+    state.isProfileLoading = false;
+    if (currentRoute() === "profile") {
+      closeProfilePage(false);
+    }
+    updateAuthUi();
+    return;
+  }
+
+  try {
+    await loadUserProfile();
+  } catch (error) {
+    console.warn("Could not load profile.", error);
+    setAccountNotice("Could not load your profile.", "error");
+  } finally {
+    updateAuthUi();
+    refreshCourseDetailViews();
+    if (currentRoute() === "profile") {
+      openProfilePage(false);
+    }
+  }
+}
+
+async function loadUserProfile() {
+  if (!canUsePrivateFeatures()) {
+    return null;
+  }
+
+  const { doc, getDoc, setDoc, serverTimestamp } = state.firebase.firestoreApi;
+  const profileRef = doc(state.firebase.db, "users", state.authUser.uid);
+  state.isProfileLoading = true;
+  renderProfileForm();
+
+  try {
+    const snapshot = await getDoc(profileRef);
+    if (snapshot.exists()) {
+      state.profile = profileFromSnapshot(snapshot);
+      return state.profile;
+    }
+
+    const profile = buildDefaultProfile(state.authUser, serverTimestamp);
+    await setDoc(profileRef, profile);
+
+    const createdSnapshot = await getDoc(profileRef);
+    state.profile = createdSnapshot.exists()
+      ? profileFromSnapshot(createdSnapshot)
+      : {
+          ...profile,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+    return state.profile;
+  } finally {
+    state.isProfileLoading = false;
+    renderProfileForm();
+  }
+}
+
+function buildDefaultProfile(user, serverTimestamp) {
+  const timestamp = serverTimestamp();
+  return {
+    displayName: cleanProfileString(user.displayName || emailName(user.email), PROFILE_FIELD_LIMITS.displayName),
+    email: cleanCell(user.email),
+    photoURL: googlePhotoUrlForUser(user),
+    bio: "",
+    phoneNumber: "",
+    location: "",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function profileFromSnapshot(snapshot) {
+  const data = snapshot.data() || {};
+  return {
+    displayName: cleanProfileString(
+      data.displayName || state.authUser?.displayName || emailName(state.authUser?.email),
+      PROFILE_FIELD_LIMITS.displayName,
+    ),
+    email: cleanCell(data.email || state.authUser?.email),
+    photoURL: cleanCell(data.photoURL || googlePhotoUrlForUser(state.authUser)),
+    bio: cleanProfileString(data.bio, PROFILE_FIELD_LIMITS.bio),
+    phoneNumber: cleanProfileString(data.phoneNumber, PROFILE_FIELD_LIMITS.phoneNumber),
+    location: cleanProfileString(data.location, PROFILE_FIELD_LIMITS.location),
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
+  };
+}
+
+function updateAuthUi() {
+  const user = state.authUser;
+  const isSignedIn = Boolean(user);
+  const isVerified = isVerifiedUser(user);
+  const accountName = isSignedIn
+    ? user.displayName || emailName(user.email) || "Account"
+    : "Guest";
+  const accountEmail = isSignedIn
+    ? cleanCell(user.email)
+    : state.firebase.ready && state.firebase.configured
+      ? "Sign in to save"
+      : "Map access only";
+
+  elements.accountName.textContent = accountName;
+  elements.accountEmail.textContent = accountEmail;
+  renderAvatar(elements.accountAvatar, user, accountName);
+
+  elements.guestAccountActions.classList.toggle("is-hidden", isSignedIn);
+  elements.userAccountActions.classList.toggle("is-hidden", !isSignedIn);
+  elements.verificationPanel.classList.toggle("is-hidden", !isSignedIn || isVerified);
+
+  const authUnavailable = !state.firebase.ready || !state.firebase.configured;
+  elements.openLogin.disabled = authUnavailable;
+  elements.openRegister.disabled = authUnavailable;
+  elements.googleSignIn.disabled = authUnavailable;
+  elements.authSubmit.disabled = authUnavailable;
+  elements.forgotPassword.disabled = authUnavailable;
+  elements.openProfile.disabled = !canUsePrivateFeatures();
+  elements.resendVerification.disabled = authUnavailable || !isSignedIn || isVerified;
+  elements.refreshVerification.disabled = authUnavailable || !isSignedIn || isVerified;
+
+  renderDefaultAccountNotice();
+  renderProfileForm();
+}
+
+function renderDefaultAccountNotice() {
+  if (elements.accountNotice.dataset.manual === "true") {
+    return;
+  }
+
+  let message = "";
+  let tone = "info";
+
+  if (state.firebase.initError) {
+    message = "Account services failed to load.";
+    tone = "error";
+  } else if (!state.firebase.ready) {
+    message = "Loading account services.";
+  } else if (!state.firebase.configured) {
+    message = "Add Firebase config to enable accounts.";
+  } else if (state.authUser && !isVerifiedUser(state.authUser)) {
+    message = "Verify your email to save progress.";
+    tone = "warning";
+  }
+
+  elements.accountNotice.textContent = message;
+  elements.accountNotice.dataset.tone = tone;
+}
+
+function setAccountNotice(message, tone = "info", timeout = AUTH_NOTICE_TIMEOUT_MS) {
+  window.clearTimeout(state.authNoticeTimer);
+  elements.accountNotice.dataset.manual = message ? "true" : "false";
+  elements.accountNotice.dataset.tone = tone;
+  elements.accountNotice.textContent = message;
+
+  if (message && timeout > 0) {
+    state.authNoticeTimer = window.setTimeout(() => {
+      elements.accountNotice.dataset.manual = "false";
+      renderDefaultAccountNotice();
+    }, timeout);
+  }
+}
+
+function isVerifiedUser(user = state.authUser) {
+  return Boolean(user?.emailVerified);
+}
+
+function canUsePrivateFeatures() {
+  return Boolean(
+    state.firebase.ready &&
+      state.firebase.configured &&
+      state.authUser &&
+      isVerifiedUser(state.authUser),
+  );
+}
+
+function requireVerifiedUser(action = "continue") {
+  if (canUsePrivateFeatures()) {
+    return true;
+  }
+
+  if (!state.firebase.ready || !state.firebase.configured) {
+    setAccountNotice("Add Firebase config before using account features.", "warning");
+    return false;
+  }
+
+  if (!state.authUser) {
+    setAccountNotice(`Sign in to ${action}.`, "warning");
+    openAuthModal("login");
+    return false;
+  }
+
+  setAccountNotice(`Verify your email to ${action}.`, "warning");
+  return false;
+}
+
+function navigateToRoute(route) {
+  const nextHash = `#${route}`;
+  if (window.location.hash === nextHash) {
+    handleRouteChange();
+  } else {
+    window.location.hash = route;
+  }
+}
+
+function currentRoute() {
+  return window.location.hash.replace(/^#\/?/, "");
+}
+
+function handleRouteChange() {
+  const route = currentRoute();
+  if (route === "login" || route === "register") {
+    closeProfilePage(false);
+    openAuthModal(route, false);
+    return;
+  }
+
+  if (route === "profile") {
+    closeAuthModal(false);
+    openProfilePage(false);
+    return;
+  }
+
+  closeAuthModal(false);
+  closeProfilePage(false);
+}
+
+function clearRouteIfActive(routes) {
+  if (!routes.includes(currentRoute())) {
+    return;
+  }
+
+  window.history.pushState(null, "", `${window.location.pathname}${window.location.search}`);
+}
+
+function openAuthModal(mode = "login", shouldUpdateRoute = true) {
+  if (shouldUpdateRoute) {
+    navigateToRoute(mode);
+    return;
+  }
+
+  state.authMode = mode;
+  renderAuthMode();
+  elements.authModal.classList.remove("is-hidden");
+  elements.authEmail.focus();
+}
+
+function closeAuthModal(shouldClearRoute = true) {
+  elements.authModal.classList.add("is-hidden");
+  elements.authMessage.textContent = "";
+  elements.authMessage.dataset.tone = "info";
+  if (shouldClearRoute) {
+    clearRouteIfActive(["login", "register"]);
+  }
+}
+
+function renderAuthMode() {
+  const isRegister = state.authMode === "register";
+  elements.authEyebrow.textContent = isRegister ? "New account" : "Account";
+  elements.authTitle.textContent = isRegister ? "Register" : "Sign in";
+  elements.authSubmit.textContent = isRegister ? "Register" : "Sign in";
+  elements.switchAuthMode.textContent = isRegister ? "Sign in instead" : "Create account";
+  elements.authDisplayNameField.classList.toggle("is-hidden", !isRegister);
+  elements.authPassword.autocomplete = isRegister ? "new-password" : "current-password";
+  elements.authMessage.textContent = "";
+  elements.authMessage.dataset.tone = "info";
+}
+
+function toggleAuthMode() {
+  navigateToRoute(state.authMode === "register" ? "login" : "register");
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  if (!state.firebase.configured) {
+    setAuthMessage("Add Firebase config before signing in.", "warning");
+    return;
+  }
+
+  const email = cleanCell(elements.authEmail.value);
+  const password = elements.authPassword.value;
+
+  if (!email || !password) {
+    setAuthMessage("Email and password are required.", "warning");
+    return;
+  }
+
+  setAuthBusy(true);
+  try {
+    if (state.authMode === "register") {
+      await registerWithEmail(email, password);
+    } else {
+      await loginWithEmail(email, password);
+    }
+  } catch (error) {
+    setAuthMessage(authErrorMessage(error), "error");
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+async function registerWithEmail(email, password) {
+  const { createUserWithEmailAndPassword, sendEmailVerification, updateProfile } =
+    state.firebase.authApi;
+  const displayName = cleanProfileString(
+    elements.authDisplayName.value || emailName(email),
+    PROFILE_FIELD_LIMITS.displayName,
+  );
+  const credential = await createUserWithEmailAndPassword(state.firebase.auth, email, password);
+
+  if (displayName) {
+    await updateProfile(credential.user, { displayName });
+  }
+
+  await sendEmailVerification(credential.user, emailActionSettings());
+  setAuthMessage("Verification email sent.", "success");
+  setAccountNotice("Verification email sent.", "success");
+}
+
+async function loginWithEmail(email, password) {
+  const { signInWithEmailAndPassword } = state.firebase.authApi;
+  const credential = await signInWithEmailAndPassword(state.firebase.auth, email, password);
+  if (credential.user.emailVerified) {
+    closeAuthModal();
+    setAccountNotice("Signed in.", "success");
+    return;
+  }
+
+  closeAuthModal();
+  setAccountNotice("Verify your email to save progress.", "warning");
+}
+
+async function signInWithGoogle() {
+  if (!state.firebase.configured) {
+    setAuthMessage("Add Firebase config before signing in.", "warning");
+    return;
+  }
+
+  const { GoogleAuthProvider, signInWithPopup } = state.firebase.authApi;
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+
+  setAuthBusy(true);
+  try {
+    await signInWithPopup(state.firebase.auth, provider);
+    closeAuthModal();
+    setAccountNotice("Signed in with Google.", "success");
+  } catch (error) {
+    setAuthMessage(authErrorMessage(error), "error");
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+async function sendPasswordReset() {
+  if (!state.firebase.configured) {
+    setAuthMessage("Add Firebase config before resetting passwords.", "warning");
+    return;
+  }
+
+  const email = cleanCell(elements.authEmail.value);
+  if (!email) {
+    setAuthMessage("Enter your email first.", "warning");
+    elements.authEmail.focus();
+    return;
+  }
+
+  setAuthBusy(true);
+  try {
+    await state.firebase.authApi.sendPasswordResetEmail(
+      state.firebase.auth,
+      email,
+      emailActionSettings(),
+    );
+    setAuthMessage("If that account exists, a reset email was sent.", "success");
+  } catch (error) {
+    setAuthMessage(authErrorMessage(error), "error");
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+async function resendVerificationEmail() {
+  if (!state.authUser || isVerifiedUser(state.authUser)) {
+    return;
+  }
+
+  try {
+    await state.firebase.authApi.sendEmailVerification(state.authUser, emailActionSettings());
+    setAccountNotice("Verification email sent.", "success");
+  } catch (error) {
+    setAccountNotice(authErrorMessage(error), "error");
+  }
+}
+
+async function refreshVerificationStatus() {
+  if (!state.authUser) {
+    return;
+  }
+
+  try {
+    await state.firebase.authApi.reload(state.authUser);
+    state.authUser = state.firebase.auth.currentUser;
+    if (canUsePrivateFeatures()) {
+      await loadUserProfile();
+      setAccountNotice("Email verified.", "success");
+    } else {
+      setAccountNotice("Email is not verified yet.", "warning");
+    }
+  } catch (error) {
+    setAccountNotice(authErrorMessage(error), "error");
+  } finally {
+    updateAuthUi();
+    refreshCourseDetailViews();
+  }
+}
+
+async function signOutUser() {
+  if (!state.firebase.configured) {
+    return;
+  }
+
+  try {
+    await state.firebase.authApi.signOut(state.firebase.auth);
+    state.profile = null;
+    closeProfilePage();
+    setAccountNotice("Signed out.", "success");
+  } catch (error) {
+    setAccountNotice(authErrorMessage(error), "error");
+  }
+}
+
+function setAuthBusy(isBusy) {
+  [
+    elements.authDisplayName,
+    elements.authEmail,
+    elements.authPassword,
+    elements.authSubmit,
+    elements.googleSignIn,
+    elements.switchAuthMode,
+    elements.forgotPassword,
+  ].forEach((element) => {
+    element.disabled = isBusy || (!state.firebase.configured && element !== elements.switchAuthMode);
+  });
+}
+
+function setAuthMessage(message, tone = "info") {
+  elements.authMessage.textContent = message;
+  elements.authMessage.dataset.tone = tone;
+}
+
+function emailActionSettings() {
+  const origin = window.location.origin;
+  const pathname = window.location.pathname || "/";
+  const isHttpOrigin = origin.startsWith("http://") || origin.startsWith("https://");
+  const baseUrl = isHttpOrigin ? `${origin}${pathname}` : PRODUCTION_APP_URL;
+
+  return {
+    url: `${baseUrl}#login`,
+    handleCodeInApp: false,
+  };
+}
+
+function openProfilePage(shouldUpdateRoute = true) {
+  if (shouldUpdateRoute) {
+    navigateToRoute("profile");
+    return;
+  }
+
+  if (!requireVerifiedUser("open your profile")) {
+    closeProfilePage(false);
+    return;
+  }
+
+  elements.profilePage.classList.remove("is-hidden");
+  renderProfileForm();
+  if (!state.profile && !state.isProfileLoading) {
+    loadUserProfile().catch((error) => {
+      console.warn("Could not load profile.", error);
+      setProfileMessage("Could not load your profile.", "error");
+    });
+  }
+}
+
+function closeProfilePage(shouldClearRoute = true) {
+  elements.profilePage.classList.add("is-hidden");
+  elements.profileMessage.textContent = "";
+  elements.profileMessage.dataset.tone = "info";
+  if (shouldClearRoute) {
+    clearRouteIfActive(["profile"]);
+  }
+}
+
+function renderProfileForm() {
+  if (!elements.profileForm) {
+    return;
+  }
+
+  const user = state.authUser;
+  const profile = state.profile || {};
+  const displayName = profile.displayName || user?.displayName || emailName(user?.email);
+  const email = profile.email || user?.email || "";
+  const photoName = displayName || email || "Profile";
+
+  renderAvatar(elements.profileAvatar, user, photoName);
+  elements.profileTitle.textContent = displayName || "My profile";
+  elements.profileSubtitle.textContent = email;
+  elements.profileDisplayName.value = displayName || "";
+  elements.profileEmail.value = email;
+  elements.profileBio.value = profile.bio || "";
+  elements.profilePhone.value = profile.phoneNumber || "";
+  elements.profileLocation.value = profile.location || "";
+  elements.profileCreatedAt.textContent = formatProfileDate(profile.createdAt);
+  elements.profileUpdatedAt.textContent = formatProfileDate(profile.updatedAt);
+  elements.profileSave.disabled = !canUsePrivateFeatures() || state.isProfileLoading;
+
+  if (state.isProfileLoading) {
+    setProfileMessage("Loading profile.", "info");
+  } else if (elements.profileMessage.textContent === "Loading profile.") {
+    setProfileMessage("", "info");
+  }
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+  if (!requireVerifiedUser("save your profile")) {
+    return;
+  }
+
+  const { doc, getDoc, setDoc, serverTimestamp } = state.firebase.firestoreApi;
+  const { updateProfile } = state.firebase.authApi;
+  const profileRef = doc(state.firebase.db, "users", state.authUser.uid);
+  const payload = {
+    displayName: cleanProfileString(elements.profileDisplayName.value, PROFILE_FIELD_LIMITS.displayName),
+    email: cleanCell(state.authUser.email),
+    photoURL: googlePhotoUrlForUser(state.authUser),
+    bio: cleanProfileString(elements.profileBio.value, PROFILE_FIELD_LIMITS.bio),
+    phoneNumber: cleanProfileString(elements.profilePhone.value, PROFILE_FIELD_LIMITS.phoneNumber),
+    location: cleanProfileString(elements.profileLocation.value, PROFILE_FIELD_LIMITS.location),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!state.profile?.createdAt) {
+    payload.createdAt = serverTimestamp();
+  }
+
+  elements.profileSave.disabled = true;
+  setProfileMessage("Saving profile.", "info");
+
+  try {
+    await updateProfile(state.authUser, { displayName: payload.displayName });
+    await setDoc(profileRef, payload, { merge: true });
+
+    const snapshot = await getDoc(profileRef);
+    state.profile = snapshot.exists() ? profileFromSnapshot(snapshot) : state.profile;
+    setProfileMessage("Profile saved.", "success");
+    updateAuthUi();
+  } catch (error) {
+    setProfileMessage(authErrorMessage(error), "error");
+  } finally {
+    elements.profileSave.disabled = !canUsePrivateFeatures();
+  }
+}
+
+function setProfileMessage(message, tone = "info") {
+  elements.profileMessage.textContent = message;
+  elements.profileMessage.dataset.tone = tone;
+}
+
+function renderAvatar(element, user, fallbackName) {
+  const photoUrl = googlePhotoUrlForUser(user);
+  const safePhotoUrl = safeHttpUrl(photoUrl);
+  element.style.backgroundImage = safePhotoUrl ? `url("${safePhotoUrl}")` : "";
+  element.textContent = safePhotoUrl ? "" : initialsForName(fallbackName);
+}
+
+function googlePhotoUrlForUser(user) {
+  if (!user) {
+    return "";
+  }
+
+  const googleProvider = user.providerData?.find((provider) => provider.providerId === "google.com");
+  return cleanCell(googleProvider?.photoURL || user.photoURL);
+}
+
+function initialsForName(value) {
+  const words = cleanCell(value).split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    return "G";
+  }
+
+  return words
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
+}
+
+function emailName(email) {
+  return cleanCell(email).split("@")[0] || "";
+}
+
+function cleanProfileString(value, maxLength) {
+  return cleanCell(value).slice(0, maxLength);
+}
+
+function formatProfileDate(value) {
+  let date = null;
+  if (value?.toDate) {
+    date = value.toDate();
+  } else if (value instanceof Date) {
+    date = value;
+  } else if (value) {
+    const parsed = new Date(value);
+    date = Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (!date) {
+    return "Not available";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function authErrorMessage(error) {
+  const code = error?.code || "";
+  if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
+    return "Sign-in was cancelled.";
+  }
+
+  if (code === "auth/weak-password") {
+    return "Use a stronger password.";
+  }
+
+  if (code === "auth/email-already-in-use") {
+    return "That email is already registered.";
+  }
+
+  if (code === "auth/invalid-email") {
+    return "Enter a valid email address.";
+  }
+
+  if (
+    code === "auth/invalid-credential" ||
+    code === "auth/user-not-found" ||
+    code === "auth/wrong-password"
+  ) {
+    return "Could not sign in with that email and password.";
+  }
+
+  if (code === "permission-denied" || code === "firestore/permission-denied") {
+    return "You do not have permission to make that change.";
+  }
+
+  return error?.message || "Something went wrong.";
 }
 
 function applyInitialSidebarState() {
@@ -691,6 +1508,10 @@ function bindCourseDetailControls(panelElement) {
 }
 
 function toggleCoursePlayed(course) {
+  if (!requireVerifiedUser("save progress")) {
+    return;
+  }
+
   const nextPlayed = !isCoursePlayed(course.key);
 
   if (nextPlayed) {
@@ -733,7 +1554,25 @@ function updateMarkerAppearance(course) {
   }
 }
 
+function refreshCourseDetailViews() {
+  state.markers.forEach((marker, courseKey) => {
+    const course = state.courses.find((item) => item.key === courseKey);
+    if (!course) {
+      return;
+    }
+
+    marker.setPopupContent(buildCourseDetailContent(course));
+    if (marker.getPopup()?.isOpen()) {
+      bindCourseDetailControls(marker.getPopup().getElement());
+    }
+  });
+}
+
 function updateCourseUserData(courseKey, updates) {
+  if (!requireVerifiedUser("save course notes")) {
+    return;
+  }
+
   state.userData[courseKey] = {
     ...getCourseUserData(courseKey),
     ...updates,
@@ -787,7 +1626,7 @@ function closeRatingModal() {
 function saveRatingModal(event) {
   event.preventDefault();
 
-  if (!state.activeRatingCourseKey) {
+  if (!state.activeRatingCourseKey || !requireVerifiedUser("save course notes")) {
     closeRatingModal();
     return;
   }
@@ -851,6 +1690,12 @@ function buildCourseDetailContent(course) {
   const userData = getCourseUserData(course.key);
   const courseKeyAttribute = escapeAttribute(course.key);
   const toggleLabel = played ? "Mark unplayed" : "Mark played";
+  const canSave = canUsePrivateFeatures();
+  const lockedMarkup = canSave
+    ? ""
+    : '<p class="detail-lock">Sign in and verify email to save personal progress.</p>';
+  const lockedAttribute = canSave ? "" : 'aria-disabled="true"';
+  const selectDisabledAttribute = canSave ? "" : "disabled";
 
   return `
     <article class="course-detail">
@@ -876,10 +1721,11 @@ function buildCourseDetailContent(course) {
       </section>
 
       <button
-        class="detail-play-toggle ${played ? "is-played" : "is-unplayed"}"
+        class="detail-play-toggle ${played ? "is-played" : "is-unplayed"} ${canSave ? "" : "is-locked"}"
         type="button"
         data-action="toggle-played"
         data-course-key="${courseKeyAttribute}"
+        ${lockedAttribute}
       >
         <span class="play-toggle-icon" aria-hidden="true"></span>
         <span>${toggleLabel}</span>
@@ -898,24 +1744,25 @@ function buildCourseDetailContent(course) {
         <header class="detail-section-header">
           <h3>My Notes</h3>
         </header>
+        ${lockedMarkup}
         <div class="detail-field-grid">
           <label class="detail-field">
             <span class="detail-label">My rating</span>
-            <select data-user-field="rating" data-course-key="${courseKeyAttribute}">
+            <select data-user-field="rating" data-course-key="${courseKeyAttribute}" ${selectDisabledAttribute}>
               ${numberOptionMarkup("Not rated", userData.rating)}
             </select>
           </label>
 
           <label class="detail-field">
             <span class="detail-label">Course condition</span>
-            <select data-user-field="condition" data-course-key="${courseKeyAttribute}">
+            <select data-user-field="condition" data-course-key="${courseKeyAttribute}" ${selectDisabledAttribute}>
               ${numberOptionMarkup("Not recorded", userData.condition)}
             </select>
           </label>
 
           <label class="detail-field">
             <span class="detail-label">Weather condition</span>
-            <select data-user-field="weather" data-course-key="${courseKeyAttribute}">
+            <select data-user-field="weather" data-course-key="${courseKeyAttribute}" ${selectDisabledAttribute}>
               ${numberOptionMarkup("Not recorded", userData.weather)}
             </select>
           </label>

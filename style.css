@@ -438,6 +438,129 @@ button {
   gap: 14px;
 }
 
+.account-panel {
+  display: grid;
+  gap: 12px;
+  padding: 13px;
+  background: color-mix(in srgb, var(--control-bg) 72%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.account-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.account-avatar,
+.profile-avatar {
+  display: grid;
+  place-items: center;
+  color: #07140d;
+  background:
+    linear-gradient(135deg, var(--accent), var(--played-bright)),
+    var(--control-bg);
+  background-position: center;
+  background-size: cover;
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  border-radius: 50%;
+  font-weight: 900;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.account-avatar {
+  width: 42px;
+  height: 42px;
+  font-size: 0.92rem;
+}
+
+.account-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.account-copy strong {
+  overflow: hidden;
+  font-size: 0.96rem;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-copy span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-actions,
+.verification-actions,
+.form-actions,
+.profile-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.account-actions.is-hidden,
+.verification-panel.is-hidden,
+.form-field.is-hidden {
+  display: none;
+}
+
+.verification-panel {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  color: var(--text);
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.verification-actions .secondary-action {
+  min-height: 34px;
+  font-size: 0.78rem;
+}
+
+.account-notice,
+.form-message {
+  min-height: 1.25em;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.account-notice:empty,
+.form-message:empty {
+  display: none;
+}
+
+.account-notice[data-tone="success"],
+.form-message[data-tone="success"] {
+  color: var(--played);
+}
+
+.account-notice[data-tone="warning"],
+.form-message[data-tone="warning"] {
+  color: #d89b28;
+}
+
+.account-notice[data-tone="error"],
+.form-message[data-tone="error"] {
+  color: var(--unplayed);
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: var(--accent);
@@ -571,6 +694,15 @@ h1 {
   color: var(--text);
   background: transparent;
   border: 1px solid var(--border);
+}
+
+.primary-action:disabled,
+.secondary-action:disabled,
+.form-field input:disabled,
+.form-field textarea:disabled,
+.auth-links button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .legend {
@@ -946,6 +1078,24 @@ h1 {
   text-underline-offset: 2px;
 }
 
+.detail-lock {
+  margin: 0;
+  padding: 10px;
+  color: var(--muted);
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.detail-play-toggle.is-locked {
+  color: var(--muted);
+  background: var(--control-bg);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
 .leaflet-control-zoom a,
 .leaflet-control-attribution {
   color: var(--text);
@@ -954,6 +1104,221 @@ h1 {
 
 .leaflet-control-attribution a {
   color: var(--accent-strong);
+}
+
+.auth-modal,
+.profile-page {
+  position: fixed;
+  inset: 0;
+  z-index: 940;
+  display: grid;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(10px);
+  transition: opacity 180ms ease, visibility 180ms ease;
+}
+
+.auth-modal {
+  place-items: center;
+}
+
+.profile-page {
+  place-items: center;
+  overflow-y: auto;
+}
+
+.auth-modal.is-hidden,
+.profile-page.is-hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auth-dialog,
+.profile-shell {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  color: var(--text);
+  background: var(--card-gradient);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  animation: popup-in 180ms ease-out;
+}
+
+.profile-shell {
+  width: min(760px, 100%);
+}
+
+.form-header,
+.profile-header {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.form-header h2,
+.profile-header h2 {
+  margin-top: 4px;
+  font-family: var(--ff-display), sans-serif;
+  font-size: 1.55rem;
+  font-weight: 800;
+  line-height: 1.08;
+}
+
+.form-close {
+  flex: 0 0 auto;
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.form-close span {
+  position: absolute;
+  width: 15px;
+  height: 2px;
+  background: currentColor;
+  border-radius: 999px;
+}
+
+.form-close span:first-child {
+  transform: rotate(45deg);
+}
+
+.form-close span:last-child {
+  transform: rotate(-45deg);
+}
+
+.auth-fields,
+.profile-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.profile-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-field {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.form-field.is-full {
+  grid-column: 1 / -1;
+}
+
+.form-field input,
+.form-field textarea {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  color: var(--text);
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+}
+
+.form-field textarea {
+  min-height: 118px;
+  padding: 11px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.form-field input:focus,
+.form-field textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.form-field input[readonly] {
+  color: var(--muted);
+  background: var(--control-bg);
+}
+
+.auth-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.auth-links button {
+  padding: 0;
+  color: var(--accent-strong);
+  background: transparent;
+  border: 0;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.profile-identity {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.profile-avatar {
+  width: 62px;
+  height: 62px;
+  font-size: 1.12rem;
+}
+
+.profile-subtitle {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.profile-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.profile-meta div {
+  min-width: 0;
+  padding: 11px;
+  background: var(--control-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.profile-meta dt {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.profile-meta dd {
+  margin: 5px 0 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.3;
 }
 
 .rating-modal {
@@ -1202,6 +1567,32 @@ h1 {
     font-size: 0.85rem;
   }
 
+  .account-panel {
+    gap: 9px;
+    padding: 10px;
+  }
+
+  .account-summary {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .account-avatar {
+    width: 36px;
+    height: 36px;
+    font-size: 0.82rem;
+  }
+
+  .account-actions,
+  .verification-actions {
+    gap: 7px;
+  }
+
+  .account-actions .primary-action,
+  .account-actions .secondary-action {
+    min-height: 36px;
+    font-size: 0.8rem;
+  }
+
   .stats-grid,
   .filter-tabs {
     gap: 6px;
@@ -1351,11 +1742,35 @@ h1 {
     padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
 
-  .rating-dialog {
+  .auth-modal,
+  .profile-page {
+    align-items: end;
+    padding: 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .rating-dialog,
+  .auth-dialog,
+  .profile-shell {
     max-height: calc(100dvh - 24px);
     overflow-y: auto;
     padding: 18px;
     border-radius: 10px;
+  }
+
+  .profile-grid,
+  .profile-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-identity {
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .profile-avatar {
+    width: 52px;
+    height: 52px;
   }
 }
 
@@ -1396,6 +1811,22 @@ h1 {
   .theme-toggle {
     height: 32px;
     font-size: 0.78rem;
+  }
+
+  .account-actions,
+  .verification-actions,
+  .form-actions,
+  .profile-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .account-copy strong {
+    font-size: 0.88rem;
+  }
+
+  .account-copy span,
+  .account-notice {
+    font-size: 0.72rem;
   }
 
   .stat-card {
