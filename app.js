@@ -50,7 +50,6 @@ const state = {
   searchTerm: "",
   skippedLocations: [],
   activeRatingCourseKey: null,
-  activeDetailCourseKey: null,
   hasFitInitialBounds: false,
 };
 
@@ -92,7 +91,6 @@ function cacheElements() {
     elements.sidebarToggle.prepend(elements.sidebarToggleLabel);
   }
   elements.themeToggle = document.getElementById("themeToggle");
-  elements.courseDetailPanel = document.getElementById("courseDetailPanel") || createCourseDetailPanel();
   elements.totalCourses = document.getElementById("totalCourses");
   elements.playedCourses = document.getElementById("playedCourses");
   elements.completionPercent = document.getElementById("completionPercent");
@@ -156,7 +154,9 @@ function initializeMap() {
     const courseKey = layer?.options?.courseKey;
     const course = state.courses.find((item) => item.key === courseKey);
     if (course) {
-      openCourseDetails(course);
+      layer.setPopupContent(buildCourseDetailContent(course));
+      layer.openPopup();
+      window.setTimeout(() => bindCourseDetailControls(layer.getPopup()?.getElement()), 0);
       return;
     }
 
@@ -167,8 +167,9 @@ function initializeMap() {
           (item) => item.key === childMarkers[0].options.courseKey,
         );
         if (childCourse) {
+          childMarkers[0].setPopupContent(buildCourseDetailContent(childCourse));
           childMarkers[0].openPopup();
-          openCourseDetails(childCourse);
+          window.setTimeout(() => bindCourseDetailControls(childMarkers[0].getPopup()?.getElement()), 0);
         }
         return;
       }
@@ -180,16 +181,6 @@ function initializeMap() {
       }
     }
   });
-}
-
-function createCourseDetailPanel() {
-  const panel = document.createElement("section");
-  panel.className = "course-detail-panel is-hidden";
-  panel.id = "courseDetailPanel";
-  panel.setAttribute("aria-label", "Course details");
-  panel.setAttribute("aria-hidden", "true");
-  elements.appShell.append(panel);
-  return panel;
 }
 
 function bindUiEvents() {
@@ -590,7 +581,6 @@ function createCourseMarker(course) {
     marker.setPopupContent(buildCourseDetailContent(course));
     marker.openPopup();
     window.setTimeout(() => bindCourseDetailControls(marker.getPopup()?.getElement()), 0);
-    openCourseDetails(course);
   });
 
   state.markers.set(course.key, marker);
@@ -672,7 +662,7 @@ function bindCourseDetailControls(panelElement) {
   const closeButton = panelElement.querySelector("[data-action='close-details']");
   if (closeButton && closeButton.dataset.controlsBound !== "true") {
     closeButton.dataset.controlsBound = "true";
-    closeButton.addEventListener("click", closeCourseDetails);
+    closeButton.addEventListener("click", () => state.map?.closePopup());
   }
 
   const toggleButton = panelElement.querySelector("[data-action='toggle-played']");
@@ -700,31 +690,6 @@ function bindCourseDetailControls(panelElement) {
   });
 }
 
-function openCourseDetails(course) {
-  state.activeDetailCourseKey = course.key;
-  renderCourseDetails(course);
-  elements.courseDetailPanel.classList.remove("is-hidden");
-  elements.courseDetailPanel.setAttribute("aria-hidden", "false");
-
-  if (isMobileLayout()) {
-    elements.appShell.classList.add("sidebar-collapsed");
-    elements.sidebarToggle.setAttribute("aria-expanded", "false");
-    updateSidebarToggleLabel();
-  }
-}
-
-function renderCourseDetails(course) {
-  elements.courseDetailPanel.innerHTML = buildCourseDetailContent(course);
-  bindCourseDetailControls(elements.courseDetailPanel);
-}
-
-function closeCourseDetails() {
-  state.activeDetailCourseKey = null;
-  elements.courseDetailPanel.classList.add("is-hidden");
-  elements.courseDetailPanel.setAttribute("aria-hidden", "true");
-  elements.courseDetailPanel.innerHTML = "";
-}
-
 function toggleCoursePlayed(course) {
   const nextPlayed = !isCoursePlayed(course.key);
 
@@ -742,10 +707,6 @@ function toggleCoursePlayed(course) {
     state.markerCluster.refreshClusters();
   } else {
     renderVisibleMarkers();
-  }
-
-  if (state.activeDetailCourseKey === course.key) {
-    renderCourseDetails(course);
   }
 
   if (nextPlayed) {
@@ -781,10 +742,6 @@ function updateCourseUserData(courseKey, updates) {
   writeJsonStorage(USER_DATA_STORAGE_KEY, state.userData);
 
   const course = state.courses.find((item) => item.key === courseKey);
-  if (course && state.activeDetailCourseKey === courseKey) {
-    renderCourseDetails(course);
-  }
-
   const marker = state.markers.get(courseKey);
   if (course && marker) {
     marker.setPopupContent(buildCourseDetailContent(course));

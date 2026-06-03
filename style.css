@@ -147,32 +147,6 @@ button {
   left: 16px;
 }
 
-.course-detail-panel {
-  position: fixed;
-  z-index: 650;
-  top: 16px;
-  right: 16px;
-  bottom: 16px;
-  width: min(420px, calc(100vw - 462px));
-  min-width: 340px;
-  overflow-y: auto;
-  color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
-  transition: transform 220ms ease, opacity 180ms ease;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--accent) 54%, transparent) transparent;
-}
-
-.course-detail-panel.is-hidden {
-  transform: translateX(calc(100% + 24px));
-  opacity: 0;
-  pointer-events: none;
-}
-
 .course-detail {
   min-height: 100%;
   display: flex;
@@ -1120,21 +1094,6 @@ h1 {
     pointer-events: none;
   }
 
-  .course-detail-panel {
-    top: auto;
-    right: max(8px, env(safe-area-inset-right));
-    bottom: max(8px, env(safe-area-inset-bottom));
-    left: max(8px, env(safe-area-inset-left));
-    width: auto;
-    min-width: 0;
-    max-height: min(72dvh, 590px);
-    border-radius: 16px 16px 10px 10px;
-  }
-
-  .course-detail-panel.is-hidden {
-    transform: translateY(calc(100% + 20px));
-  }
-
   .course-detail-hero {
     padding: 18px 18px 16px;
   }
@@ -1411,13 +1370,6 @@ h1 {
     left: 6px;
     gap: 9px;
     padding: 10px;
-  }
-
-  .course-detail-panel {
-    right: 6px;
-    bottom: 6px;
-    left: 6px;
-    max-height: 70dvh;
   }
 
   .detail-list {
