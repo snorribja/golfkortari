@@ -77,5 +77,8 @@ Fields:
 - `rating`
 - `condition`
 - `weather`
+- `wishlist`
+- `playedDate`
+- `note`
 - `createdAt`
 - `updatedAt`

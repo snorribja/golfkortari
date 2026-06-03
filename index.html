@@ -156,8 +156,21 @@
             <button class="filter-button" type="button" data-filter="unplayed">
               Unplayed
             </button>
+            <button class="filter-button" type="button" data-filter="wishlist">
+              Wishlist
+            </button>
           </div>
 
+        </section>
+
+        <section class="timeline-panel" aria-label="Played course timeline">
+          <header class="timeline-header">
+            <h2>Timeline</h2>
+            <span id="timelineCount">0</span>
+          </header>
+          <ol class="timeline-list" id="timelineList">
+            <li class="empty-timeline">No played dates yet</li>
+          </ol>
         </section>
 
         <section class="legend" aria-label="Marker legend">
@@ -169,6 +182,10 @@
           <div class="legend-row">
             <span class="legend-dot legend-dot-played"></span>
             <span>Played</span>
+          </div>
+          <div class="legend-row">
+            <span class="legend-dot legend-dot-wishlist"></span>
+            <span>Wishlist</span>
           </div>
         </section>
 
@@ -384,6 +401,11 @@
           </header>
 
           <div class="rating-fields">
+            <label class="rating-field">
+              <span>Played date</span>
+              <input id="modalPlayedDate" name="playedDate" type="date" />
+            </label>
+
             <label class="rating-field">
               <span>My rating</span>
               <select id="modalRating" name="rating"></select>

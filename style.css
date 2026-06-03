@@ -289,7 +289,25 @@ button {
   transition: transform 160ms ease, filter 160ms ease, box-shadow 160ms ease;
 }
 
+.detail-wishlist-toggle {
+  width: calc(100% - 36px);
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 10px 18px 0;
+  padding: 0 14px;
+  color: var(--text);
+  background: var(--control-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 800;
+  transition: transform 160ms ease, filter 160ms ease, box-shadow 160ms ease;
+}
+
 .detail-play-toggle:hover,
+.detail-wishlist-toggle:hover,
 .detail-close:hover {
   transform: translateY(-1px);
   filter: brightness(1.05);
@@ -346,6 +364,30 @@ button {
 
 .is-played > .play-toggle-icon::after {
   display: none;
+}
+
+.wishlist-toggle-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 21px;
+  height: 21px;
+  display: inline-grid;
+  place-items: center;
+}
+
+.wishlist-toggle-icon::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  clip-path: polygon(50% 0%, 62% 34%, 98% 35%, 69% 56%, 79% 91%, 50% 70%, 21% 91%, 31% 56%, 2% 35%, 38% 34%);
+}
+
+.detail-wishlist-toggle.is-active {
+  color: #07140d;
+  background: #d89b28;
+  border-color: #d89b28;
+  box-shadow: 0 12px 24px rgba(216, 155, 40, 0.18);
 }
 
 .detail-section {
@@ -407,7 +449,13 @@ button {
   gap: 7px;
 }
 
-.detail-field select {
+.detail-field.is-full {
+  grid-column: 1 / -1;
+}
+
+.detail-field select,
+.detail-field input,
+.detail-field textarea {
   width: 100%;
   min-height: 42px;
   padding: 0 10px;
@@ -418,9 +466,25 @@ button {
   outline: none;
 }
 
-.detail-field select:focus {
+.detail-field textarea {
+  min-height: 92px;
+  padding: 10px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.detail-field select:focus,
+.detail-field input:focus,
+.detail-field textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.detail-field select:disabled,
+.detail-field input:disabled,
+.detail-field textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .sidebar-toggle:hover,
@@ -655,7 +719,7 @@ h1 {
 
 .filter-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -674,6 +738,87 @@ h1 {
   color: #ffffff;
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.timeline-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: var(--card-gradient);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.timeline-header h2 {
+  font-size: 0.95rem;
+}
+
+.timeline-header span {
+  min-width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: #07140d;
+  background: var(--accent);
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
+.timeline-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline-item {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  background: var(--control-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.timeline-item time {
+  color: var(--accent-strong);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.timeline-item strong,
+.timeline-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-item strong {
+  font-size: 0.86rem;
+}
+
+.timeline-item span,
+.empty-timeline {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.empty-timeline {
+  padding: 10px;
+  background: var(--control-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 .primary-action,
@@ -740,6 +885,10 @@ h1 {
 
 .legend-dot-played {
   background: var(--played);
+}
+
+.legend-dot-wishlist {
+  background: #d89b28;
 }
 
 .app-footer {
@@ -1015,6 +1164,12 @@ h1 {
   margin: 13px 14px;
 }
 
+.leaflet-popup-content .detail-wishlist-toggle {
+  width: calc(100% - 28px);
+  min-height: 40px;
+  margin: -3px 14px 13px;
+}
+
 .leaflet-popup-content .detail-section {
   gap: 10px;
   padding: 14px;
@@ -1044,6 +1199,14 @@ h1 {
 
 .leaflet-popup-content .detail-field select {
   min-height: 38px;
+}
+
+.leaflet-popup-content .detail-field input {
+  min-height: 38px;
+}
+
+.leaflet-popup-content .detail-field textarea {
+  min-height: 82px;
 }
 
 .detail {
@@ -1089,7 +1252,8 @@ h1 {
   line-height: 1.35;
 }
 
-.detail-play-toggle.is-locked {
+.detail-play-toggle.is-locked,
+.detail-wishlist-toggle.is-locked {
   color: var(--muted);
   background: var(--control-bg);
   border-color: var(--border);
@@ -1378,7 +1542,9 @@ h1 {
   font-weight: 800;
 }
 
-.rating-field select {
+.rating-field select,
+.rating-field input {
+  width: 100%;
   min-height: 42px;
   padding: 0 11px;
   color: var(--text);
@@ -1388,7 +1554,8 @@ h1 {
   outline: none;
 }
 
-.rating-field select:focus {
+.rating-field select:focus,
+.rating-field input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
@@ -1494,6 +1661,12 @@ h1 {
     margin: 12px 12px 0;
   }
 
+  .detail-wishlist-toggle {
+    width: calc(100% - 24px);
+    min-height: 40px;
+    margin: 9px 12px 0;
+  }
+
   .detail-section {
     gap: 10px;
     padding: 13px 12px;
@@ -1591,6 +1764,17 @@ h1 {
   .account-actions .secondary-action {
     min-height: 36px;
     font-size: 0.8rem;
+  }
+
+  .timeline-panel {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .timeline-list {
+    max-height: 170px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .stats-grid,
@@ -1728,6 +1912,11 @@ h1 {
     margin: 10px 12px;
   }
 
+  .leaflet-popup-content .detail-wishlist-toggle {
+    min-height: 38px;
+    margin: -2px 12px 10px;
+  }
+
   .detail-label {
     font-size: 0.62rem;
   }
@@ -1845,6 +2034,10 @@ h1 {
   .filter-button {
     min-height: 36px;
     font-size: 0.76rem;
+  }
+
+  .filter-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .legend {

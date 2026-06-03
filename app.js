@@ -14,6 +14,7 @@ const PROFILE_FIELD_LIMITS = {
   phoneNumber: 40,
   location: 120,
 };
+const COURSE_NOTE_MAX_LENGTH = 500;
 
 // The GolfBox CSV contract. These names are also used to normalize the raw
 // rows so every field from the file can be represented in the interface.
@@ -122,6 +123,8 @@ function cacheElements() {
   elements.completionPercent = document.getElementById("completionPercent");
   elements.courseSearch = document.getElementById("courseSearch");
   elements.filterButtons = Array.from(document.querySelectorAll(".filter-button"));
+  elements.timelineCount = document.getElementById("timelineCount");
+  elements.timelineList = document.getElementById("timelineList");
   elements.footerTotal = document.getElementById("footerTotal");
   elements.lastUpdated = document.getElementById("lastUpdated");
   elements.loadingOverlay = document.getElementById("loadingOverlay");
@@ -175,6 +178,7 @@ function cacheElements() {
   elements.ratingModal = document.getElementById("ratingModal");
   elements.ratingForm = document.getElementById("ratingForm");
   elements.ratingCourseName = document.getElementById("ratingCourseName");
+  elements.modalPlayedDate = document.getElementById("modalPlayedDate");
   elements.modalRating = document.getElementById("modalRating");
   elements.modalCondition = document.getElementById("modalCondition");
   elements.modalWeather = document.getElementById("modalWeather");
@@ -514,6 +518,9 @@ async function loadUserCourseData() {
         rating: normalizeCourseMetric(data.rating),
         condition: normalizeCourseMetric(data.condition),
         weather: normalizeCourseMetric(data.weather),
+        wishlist: data.wishlist === true,
+        playedDate: normalizePlayedDate(data.playedDate),
+        note: cleanCourseNote(data.note),
       };
     });
 
@@ -547,9 +554,16 @@ async function persistCourseData(courseKey) {
   );
   const userData = getCourseUserData(courseKey);
   const hasPlayed = isCoursePlayed(courseKey);
-  const hasNotes = Boolean(userData.rating || userData.condition || userData.weather);
+  const hasDetails = Boolean(
+    userData.rating ||
+      userData.condition ||
+      userData.weather ||
+      userData.wishlist ||
+      userData.playedDate ||
+      userData.note,
+  );
 
-  if (!hasPlayed && !hasNotes) {
+  if (!hasPlayed && !hasDetails) {
     await deleteDoc(courseDataRef);
     state.courseDataDocIds.delete(docId);
     return;
@@ -561,6 +575,9 @@ async function persistCourseData(courseKey) {
     rating: userData.rating,
     condition: userData.condition,
     weather: userData.weather,
+    wishlist: userData.wishlist,
+    playedDate: userData.playedDate,
+    note: userData.note,
     updatedAt: serverTimestamp(),
   };
 
@@ -587,6 +604,25 @@ function decodeCourseDocId(docId) {
 function normalizeCourseMetric(value) {
   const text = cleanCell(value);
   return /^(10|[1-9])$/.test(text) ? text : "";
+}
+
+function normalizePlayedDate(value) {
+  const text = cleanCell(value);
+  if (!text) {
+    return "";
+  }
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(new Date(`${text}T00:00:00`).getTime())
+    ? text
+    : "";
+}
+
+function cleanCourseNote(value) {
+  return cleanCell(value).slice(0, COURSE_NOTE_MAX_LENGTH);
+}
+
+function normalizeBoolean(value) {
+  return value === true || value === "true" || value === "on";
 }
 
 function updateAuthUi() {
@@ -801,8 +837,7 @@ async function handleAuthSubmit(event) {
 }
 
 async function registerWithEmail(email, password) {
-  const { createUserWithEmailAndPassword, sendEmailVerification, updateProfile } =
-    state.firebase.authApi;
+  const { createUserWithEmailAndPassword, updateProfile } = state.firebase.authApi;
   const displayName = cleanProfileString(
     elements.authDisplayName.value || emailName(email),
     PROFILE_FIELD_LIMITS.displayName,
@@ -813,9 +848,18 @@ async function registerWithEmail(email, password) {
     await updateProfile(credential.user, { displayName });
   }
 
-  await sendEmailVerification(credential.user, emailActionSettings());
+  await sendVerificationEmail(credential.user);
   setAuthMessage("Verification email sent.", "success");
   setAccountNotice("Verification email sent.", "success");
+}
+
+async function sendVerificationEmail(user) {
+  const actionSettings = emailActionSettings();
+  console.info("Sending Firebase verification email.", {
+    email: user.email,
+    actionUrl: actionSettings.url,
+  });
+  await state.firebase.authApi.sendEmailVerification(user, actionSettings);
 }
 
 async function loginWithEmail(email, password) {
@@ -887,7 +931,7 @@ async function resendVerificationEmail() {
   }
 
   try {
-    await state.firebase.authApi.sendEmailVerification(state.authUser, emailActionSettings());
+    await sendVerificationEmail(state.authUser);
     setAccountNotice("Verification email sent.", "success");
   } catch (error) {
     setAccountNotice(authErrorMessage(error), "error");
@@ -1124,6 +1168,17 @@ function formatProfileDate(value) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+function formatPlayedDate(value) {
+  const normalized = normalizePlayedDate(value);
+  if (!normalized) {
+    return "Not dated";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+  }).format(new Date(`${normalized}T00:00:00`));
 }
 
 function authErrorMessage(error) {
@@ -1531,15 +1586,16 @@ function popupOptions() {
 
 function markerStyle(course) {
   const played = isCoursePlayed(course.key);
+  const wishlist = getCourseUserData(course.key).wishlist;
 
   return {
     radius: 8,
     weight: 3,
     opacity: 1,
     fillOpacity: 0.88,
-    color: played ? "#0f6f41" : "#a72f29",
-    fillColor: played ? "#28b96d" : "#ef5b53",
-    className: `course-marker ${played ? "is-played" : "is-unplayed"}`,
+    color: played ? "#0f6f41" : wishlist ? "#8a6812" : "#a72f29",
+    fillColor: played ? "#28b96d" : wishlist ? "#d89b28" : "#ef5b53",
+    className: `course-marker ${played ? "is-played" : "is-unplayed"} ${wishlist ? "is-wishlist" : ""}`,
   };
 }
 
@@ -1563,10 +1619,12 @@ function renderVisibleMarkers() {
 
 function courseMatchesCurrentView(course) {
   const played = isCoursePlayed(course.key);
+  const userData = getCourseUserData(course.key);
   const matchesFilter =
     state.activeFilter === "all" ||
     (state.activeFilter === "played" && played) ||
-    (state.activeFilter === "unplayed" && !played);
+    (state.activeFilter === "unplayed" && !played) ||
+    (state.activeFilter === "wishlist" && userData.wishlist);
   const matchesSearch = !state.searchTerm || course.searchText.includes(state.searchTerm);
 
   return matchesFilter && matchesSearch;
@@ -1608,6 +1666,17 @@ function bindCourseDetailControls(panelElement) {
     });
   }
 
+  const wishlistButton = panelElement.querySelector("[data-action='toggle-wishlist']");
+  if (wishlistButton && wishlistButton.dataset.controlsBound !== "true") {
+    wishlistButton.dataset.controlsBound = "true";
+    wishlistButton.addEventListener("click", () => {
+      const currentData = getCourseUserData(wishlistButton.dataset.courseKey);
+      updateCourseUserData(wishlistButton.dataset.courseKey, {
+        wishlist: !currentData.wishlist,
+      });
+    });
+  }
+
   panelElement.querySelectorAll("[data-user-field]").forEach((field) => {
     if (field.dataset.controlsBound === "true") {
       return;
@@ -1639,6 +1708,7 @@ async function toggleCoursePlayed(course) {
 
   updateMarkerAppearance(course);
   updateStats();
+  updateTimeline();
 
   if (courseMatchesCurrentView(course)) {
     state.markerCluster.refreshClusters();
@@ -1657,6 +1727,7 @@ async function toggleCoursePlayed(course) {
     state.userData = previousUserData;
     updateMarkerAppearance(course);
     updateStats();
+    updateTimeline();
     renderVisibleMarkers();
     setAccountNotice(authErrorMessage(error), "error");
   }
@@ -1678,6 +1749,7 @@ function updateMarkerAppearance(course) {
   if (markerElement) {
     markerElement.classList.toggle("is-played", isCoursePlayed(course.key));
     markerElement.classList.toggle("is-unplayed", !isCoursePlayed(course.key));
+    markerElement.classList.toggle("is-wishlist", getCourseUserData(course.key).wishlist);
   }
 }
 
@@ -1711,10 +1783,14 @@ async function updateCourseUserData(courseKey, updates) {
   const course = state.courses.find((item) => item.key === courseKey);
   const marker = state.markers.get(courseKey);
   if (course && marker) {
-    marker.setPopupContent(buildCourseDetailContent(course));
-    if (marker.getPopup()?.isOpen()) {
-      bindCourseDetailControls(marker.getPopup().getElement());
-    }
+    updateMarkerAppearance(course);
+  }
+  updateTimeline();
+  const shouldRefreshFilteredMarkers =
+    state.activeFilter === "wishlist" &&
+    Object.prototype.hasOwnProperty.call(updates, "wishlist");
+  if (shouldRefreshFilteredMarkers) {
+    renderVisibleMarkers();
   }
 
   try {
@@ -1722,11 +1798,12 @@ async function updateCourseUserData(courseKey, updates) {
   } catch (error) {
     state.userData = previousUserData;
     state.played = previousPlayed;
+    updateTimeline();
     if (course && marker) {
-      marker.setPopupContent(buildCourseDetailContent(course));
-      if (marker.getPopup()?.isOpen()) {
-        bindCourseDetailControls(marker.getPopup().getElement());
-      }
+      updateMarkerAppearance(course);
+    }
+    if (shouldRefreshFilteredMarkers) {
+      renderVisibleMarkers();
     }
     setAccountNotice(authErrorMessage(error), "error");
   }
@@ -1737,6 +1814,9 @@ function getCourseUserData(courseKey) {
     rating: "",
     condition: "",
     weather: "",
+    wishlist: false,
+    playedDate: "",
+    note: "",
     ...(state.userData[courseKey] || {}),
   };
 }
@@ -1748,6 +1828,15 @@ function normalizeCourseUserData(updates) {
       normalized[key] = normalizeCourseMetric(updates[key]);
     }
   });
+  if (Object.prototype.hasOwnProperty.call(updates, "wishlist")) {
+    normalized.wishlist = normalizeBoolean(updates.wishlist);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "playedDate")) {
+    normalized.playedDate = normalizePlayedDate(updates.playedDate);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "note")) {
+    normalized.note = cleanCourseNote(updates.note);
+  }
   return normalized;
 }
 
@@ -1763,6 +1852,7 @@ function openRatingModal(course) {
 
   state.activeRatingCourseKey = course.key;
   elements.ratingCourseName.textContent = `${course.courseName} · ${course.clubName}`;
+  elements.modalPlayedDate.value = userData.playedDate;
   elements.modalRating.value = userData.rating;
   elements.modalCondition.value = userData.condition;
   elements.modalWeather.value = userData.weather;
@@ -1775,7 +1865,7 @@ function closeRatingModal() {
   state.activeRatingCourseKey = null;
 }
 
-function saveRatingModal(event) {
+async function saveRatingModal(event) {
   event.preventDefault();
 
   if (!state.activeRatingCourseKey || !requireVerifiedUser("save course notes")) {
@@ -1783,7 +1873,8 @@ function saveRatingModal(event) {
     return;
   }
 
-  updateCourseUserData(state.activeRatingCourseKey, {
+  await updateCourseUserData(state.activeRatingCourseKey, {
+    playedDate: elements.modalPlayedDate.value,
     rating: elements.modalRating.value,
     condition: elements.modalCondition.value,
     weather: elements.modalWeather.value,
@@ -1827,6 +1918,41 @@ function updateStats() {
   elements.totalCourses.textContent = String(total);
   elements.playedCourses.textContent = String(played);
   elements.completionPercent.textContent = `${percent}%`;
+  updateTimeline();
+}
+
+function updateTimeline() {
+  if (!elements.timelineList || !elements.timelineCount) {
+    return;
+  }
+
+  const items = state.courses
+    .map((course) => ({
+      course,
+      userData: getCourseUserData(course.key),
+    }))
+    .filter((item) => isCoursePlayed(item.course.key) && item.userData.playedDate)
+    .sort((a, b) => b.userData.playedDate.localeCompare(a.userData.playedDate));
+
+  elements.timelineCount.textContent = String(items.length);
+
+  if (!items.length) {
+    elements.timelineList.innerHTML = '<li class="empty-timeline">No played dates yet</li>';
+    return;
+  }
+
+  elements.timelineList.innerHTML = items
+    .slice(0, 8)
+    .map(
+      ({ course, userData }) => `
+        <li class="timeline-item">
+          <time datetime="${escapeAttribute(userData.playedDate)}">${escapeHtml(formatPlayedDate(userData.playedDate))}</time>
+          <strong>${escapeHtml(course.courseName)}</strong>
+          <span>${escapeHtml(displayValue(course.clubName))}</span>
+        </li>
+      `,
+    )
+    .join("");
 }
 
 function updateFooter() {
@@ -1842,12 +1968,14 @@ function buildCourseDetailContent(course) {
   const userData = getCourseUserData(course.key);
   const courseKeyAttribute = escapeAttribute(course.key);
   const toggleLabel = played ? "Mark unplayed" : "Mark played";
+  const wishlistLabel = userData.wishlist ? "Remove wishlist" : "Add wishlist";
   const canSave = canUsePrivateFeatures();
   const lockedMarkup = canSave
     ? ""
     : '<p class="detail-lock">Sign in and verify email to save personal progress.</p>';
   const lockedAttribute = canSave ? "" : 'aria-disabled="true"';
   const selectDisabledAttribute = canSave ? "" : "disabled";
+  const fieldDisabledAttribute = canSave ? "" : "disabled";
 
   return `
     <article class="course-detail">
@@ -1881,6 +2009,17 @@ function buildCourseDetailContent(course) {
       >
         <span class="play-toggle-icon" aria-hidden="true"></span>
         <span>${toggleLabel}</span>
+      </button>
+
+      <button
+        class="detail-wishlist-toggle ${userData.wishlist ? "is-active" : ""} ${canSave ? "" : "is-locked"}"
+        type="button"
+        data-action="toggle-wishlist"
+        data-course-key="${courseKeyAttribute}"
+        ${lockedAttribute}
+      >
+        <span class="wishlist-toggle-icon" aria-hidden="true"></span>
+        <span>${wishlistLabel}</span>
       </button>
 
       <section class="detail-section" aria-label="Contact details">
@@ -1917,6 +2056,28 @@ function buildCourseDetailContent(course) {
             <select data-user-field="weather" data-course-key="${courseKeyAttribute}" ${selectDisabledAttribute}>
               ${numberOptionMarkup("Not recorded", userData.weather)}
             </select>
+          </label>
+
+          <label class="detail-field">
+            <span class="detail-label">Played date</span>
+            <input
+              type="date"
+              data-user-field="playedDate"
+              data-course-key="${courseKeyAttribute}"
+              value="${escapeAttribute(userData.playedDate)}"
+              ${fieldDisabledAttribute}
+            />
+          </label>
+
+          <label class="detail-field is-full">
+            <span class="detail-label">Private note</span>
+            <textarea
+              data-user-field="note"
+              data-course-key="${courseKeyAttribute}"
+              maxlength="${COURSE_NOTE_MAX_LENGTH}"
+              rows="4"
+              ${fieldDisabledAttribute}
+            >${escapeHtml(userData.note)}</textarea>
           </label>
         </div>
       </section>
