@@ -1,7 +1,7 @@
 # golfkortari
 
-Static Iceland golf course tracker with Firebase-backed accounts and private
-profile documents.
+Static Iceland golf course tracker with Firebase-backed accounts, private
+profile documents, and per-user course progress.
 
 ## Local Development
 
@@ -43,7 +43,7 @@ Firebase Auth and Firestore Security Rules.
 - Email/password users must verify their email before saving progress or opening
   their profile.
 - Google profile photos are used as avatars when available.
-- Existing local course progress is not synced into Firestore after login.
+- Verified users store course progress and course notes in Firestore.
 
 ## Firestore Data
 
@@ -61,5 +61,21 @@ Fields:
 - `bio`
 - `phoneNumber`
 - `location`
+- `createdAt`
+- `updatedAt`
+
+Course progress documents are stored at:
+
+```text
+users/{uid}/courseData/{encodedCourseKey}
+```
+
+Fields:
+
+- `courseKey`
+- `played`
+- `rating`
+- `condition`
+- `weather`
 - `createdAt`
 - `updatedAt`

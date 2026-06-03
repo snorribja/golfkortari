@@ -2,10 +2,7 @@
 // GitHub Pages as long as the CSV sits beside index.html.
 const CSV_FILE = "golfbox_iceland_clubs.csv";
 
-// localStorage keys are versioned so future data shape changes can migrate
-// cleanly without breaking existing users.
-const PLAYED_STORAGE_KEY = "icelandGolfCourses.played.v1";
-const USER_DATA_STORAGE_KEY = "icelandGolfCourses.userData.v1";
+// Theme remains browser-local; account data and course progress live in Firestore.
 const THEME_STORAGE_KEY = "icelandGolfCourses.theme.v1";
 const FIREBASE_SDK_VERSION = "12.7.0";
 const PRODUCTION_APP_URL = "https://golfkortari.snorribjarkason.com/";
@@ -54,8 +51,9 @@ const state = {
   markerCluster: null,
   courses: [],
   markers: new Map(),
-  played: readJsonStorage(PLAYED_STORAGE_KEY, {}),
-  userData: readJsonStorage(USER_DATA_STORAGE_KEY, {}),
+  played: {},
+  userData: {},
+  courseDataDocIds: new Set(),
   activeFilter: "all",
   searchTerm: "",
   skippedLocations: [],
@@ -76,6 +74,7 @@ const state = {
   authMode: "login",
   authNoticeTimer: null,
   isProfileLoading: false,
+  isCourseDataLoading: false,
 };
 
 const elements = {};
@@ -382,25 +381,29 @@ function isFirebaseConfigComplete(firebaseConfig) {
 async function handleAuthStateChanged(user) {
   state.authUser = user;
   state.profile = null;
+  resetCourseProgressState();
   updateAuthUi();
   refreshCourseDetailViews();
 
   if (!canUsePrivateFeatures()) {
     state.isProfileLoading = false;
+    state.isCourseDataLoading = false;
     if (currentRoute() === "profile") {
       closeProfilePage(false);
     }
     updateAuthUi();
+    renderVisibleMarkers();
     return;
   }
 
   try {
-    await loadUserProfile();
+    await Promise.all([loadUserProfile(), loadUserCourseData()]);
   } catch (error) {
-    console.warn("Could not load profile.", error);
-    setAccountNotice("Could not load your profile.", "error");
+    console.warn("Could not load account data.", error);
+    setAccountNotice("Could not load your account data.", "error");
   } finally {
     updateAuthUi();
+    renderVisibleMarkers();
     refreshCourseDetailViews();
     if (currentRoute() === "profile") {
       openProfilePage(false);
@@ -472,6 +475,118 @@ function profileFromSnapshot(snapshot) {
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
+}
+
+async function loadUserCourseData() {
+  if (!canUsePrivateFeatures()) {
+    resetCourseProgressState();
+    return;
+  }
+
+  const { collection, getDocs } = state.firebase.firestoreApi;
+  state.isCourseDataLoading = true;
+
+  try {
+    const courseDataRef = collection(
+      state.firebase.db,
+      "users",
+      state.authUser.uid,
+      "courseData",
+    );
+    const snapshot = await getDocs(courseDataRef);
+    const played = {};
+    const userData = {};
+    const docIds = new Set();
+
+    snapshot.forEach((docSnapshot) => {
+      const data = docSnapshot.data() || {};
+      const courseKey = cleanCell(data.courseKey || decodeCourseDocId(docSnapshot.id));
+      if (!courseKey) {
+        return;
+      }
+
+      docIds.add(courseDataDocId(courseKey));
+      if (data.played === true) {
+        played[courseKey] = true;
+      }
+
+      userData[courseKey] = {
+        rating: normalizeCourseMetric(data.rating),
+        condition: normalizeCourseMetric(data.condition),
+        weather: normalizeCourseMetric(data.weather),
+      };
+    });
+
+    state.played = played;
+    state.userData = userData;
+    state.courseDataDocIds = docIds;
+  } finally {
+    state.isCourseDataLoading = false;
+  }
+}
+
+function resetCourseProgressState() {
+  state.played = {};
+  state.userData = {};
+  state.courseDataDocIds = new Set();
+}
+
+async function persistCourseData(courseKey) {
+  if (!canUsePrivateFeatures()) {
+    return;
+  }
+
+  const { deleteDoc, doc, serverTimestamp, setDoc } = state.firebase.firestoreApi;
+  const docId = courseDataDocId(courseKey);
+  const courseDataRef = doc(
+    state.firebase.db,
+    "users",
+    state.authUser.uid,
+    "courseData",
+    docId,
+  );
+  const userData = getCourseUserData(courseKey);
+  const hasPlayed = isCoursePlayed(courseKey);
+  const hasNotes = Boolean(userData.rating || userData.condition || userData.weather);
+
+  if (!hasPlayed && !hasNotes) {
+    await deleteDoc(courseDataRef);
+    state.courseDataDocIds.delete(docId);
+    return;
+  }
+
+  const payload = {
+    courseKey,
+    played: hasPlayed,
+    rating: userData.rating,
+    condition: userData.condition,
+    weather: userData.weather,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!state.courseDataDocIds.has(docId)) {
+    payload.createdAt = serverTimestamp();
+  }
+
+  await setDoc(courseDataRef, payload, { merge: true });
+  state.courseDataDocIds.add(docId);
+}
+
+function courseDataDocId(courseKey) {
+  return encodeURIComponent(courseKey);
+}
+
+function decodeCourseDocId(docId) {
+  try {
+    return decodeURIComponent(docId);
+  } catch {
+    return docId;
+  }
+}
+
+function normalizeCourseMetric(value) {
+  const text = cleanCell(value);
+  return /^(10|[1-9])$/.test(text) ? text : "";
 }
 
 function updateAuthUi() {
@@ -788,7 +903,7 @@ async function refreshVerificationStatus() {
     await state.firebase.authApi.reload(state.authUser);
     state.authUser = state.firebase.auth.currentUser;
     if (canUsePrivateFeatures()) {
-      await loadUserProfile();
+      await Promise.all([loadUserProfile(), loadUserCourseData()]);
       setAccountNotice("Email verified.", "success");
     } else {
       setAccountNotice("Email is not verified yet.", "warning");
@@ -1507,12 +1622,14 @@ function bindCourseDetailControls(panelElement) {
   });
 }
 
-function toggleCoursePlayed(course) {
+async function toggleCoursePlayed(course) {
   if (!requireVerifiedUser("save progress")) {
     return;
   }
 
   const nextPlayed = !isCoursePlayed(course.key);
+  const previousPlayed = { ...state.played };
+  const previousUserData = { ...state.userData };
 
   if (nextPlayed) {
     state.played[course.key] = true;
@@ -1520,7 +1637,6 @@ function toggleCoursePlayed(course) {
     delete state.played[course.key];
   }
 
-  writeJsonStorage(PLAYED_STORAGE_KEY, state.played);
   updateMarkerAppearance(course);
   updateStats();
 
@@ -1532,6 +1648,17 @@ function toggleCoursePlayed(course) {
 
   if (nextPlayed) {
     openRatingModal(course);
+  }
+
+  try {
+    await persistCourseData(course.key);
+  } catch (error) {
+    state.played = previousPlayed;
+    state.userData = previousUserData;
+    updateMarkerAppearance(course);
+    updateStats();
+    renderVisibleMarkers();
+    setAccountNotice(authErrorMessage(error), "error");
   }
 }
 
@@ -1568,17 +1695,18 @@ function refreshCourseDetailViews() {
   });
 }
 
-function updateCourseUserData(courseKey, updates) {
+async function updateCourseUserData(courseKey, updates) {
   if (!requireVerifiedUser("save course notes")) {
     return;
   }
 
+  const previousUserData = { ...state.userData };
+  const previousPlayed = { ...state.played };
+
   state.userData[courseKey] = {
     ...getCourseUserData(courseKey),
-    ...updates,
+    ...normalizeCourseUserData(updates),
   };
-
-  writeJsonStorage(USER_DATA_STORAGE_KEY, state.userData);
 
   const course = state.courses.find((item) => item.key === courseKey);
   const marker = state.markers.get(courseKey);
@@ -1587,6 +1715,20 @@ function updateCourseUserData(courseKey, updates) {
     if (marker.getPopup()?.isOpen()) {
       bindCourseDetailControls(marker.getPopup().getElement());
     }
+  }
+
+  try {
+    await persistCourseData(courseKey);
+  } catch (error) {
+    state.userData = previousUserData;
+    state.played = previousPlayed;
+    if (course && marker) {
+      marker.setPopupContent(buildCourseDetailContent(course));
+      if (marker.getPopup()?.isOpen()) {
+        bindCourseDetailControls(marker.getPopup().getElement());
+      }
+    }
+    setAccountNotice(authErrorMessage(error), "error");
   }
 }
 
@@ -1597,6 +1739,16 @@ function getCourseUserData(courseKey) {
     weather: "",
     ...(state.userData[courseKey] || {}),
   };
+}
+
+function normalizeCourseUserData(updates) {
+  const normalized = {};
+  ["rating", "condition", "weather"].forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(updates, key)) {
+      normalized[key] = normalizeCourseMetric(updates[key]);
+    }
+  });
+  return normalized;
 }
 
 function populateRatingOptions() {
@@ -1937,24 +2089,6 @@ function escapeHtml(value) {
 
 function escapeAttribute(value) {
   return escapeHtml(value);
-}
-
-function readJsonStorage(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch (error) {
-    console.warn(`Could not read localStorage key "${key}".`, error);
-    return fallback;
-  }
-}
-
-function writeJsonStorage(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch (error) {
-    console.warn(`Could not write localStorage key "${key}".`, error);
-  }
 }
 
 function isValidIcelandCoordinate(lat, lng) {
