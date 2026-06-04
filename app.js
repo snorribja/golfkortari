@@ -76,6 +76,7 @@ const state = {
   authNoticeTimer: null,
   isProfileLoading: false,
   isCourseDataLoading: false,
+  pendingMarkerRefreshAfterPopupClose: false,
 };
 
 const elements = {};
@@ -269,6 +270,12 @@ function initializeMap() {
 function bindUiEvents() {
   state.map.on("popupopen", (event) => {
     bindCourseDetailControls(event.popup.getElement());
+  });
+  state.map.on("popupclose", () => {
+    if (state.pendingMarkerRefreshAfterPopupClose) {
+      state.pendingMarkerRefreshAfterPopupClose = false;
+      renderVisibleMarkers();
+    }
   });
 
   populateRatingOptions();
@@ -548,6 +555,8 @@ async function loadUserCourseData() {
         wishlist: data.wishlist === true,
         playedDate: normalizePlayedDate(data.playedDate),
         note: cleanCourseNote(data.note),
+        createdAtMs: timestampToMillis(data.createdAt),
+        updatedAtMs: timestampToMillis(data.updatedAt),
       };
     });
 
@@ -987,6 +996,7 @@ async function refreshVerificationStatus() {
     setAccountNotice(authErrorMessage(error), "error");
   } finally {
     updateAuthUi();
+    renderVisibleMarkers();
     refreshCourseDetailViews();
   }
 }
@@ -1199,6 +1209,34 @@ function formatProfileDate(value) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+function timestampToMillis(value) {
+  if (value?.toMillis) {
+    return value.toMillis();
+  }
+
+  if (value?.toDate) {
+    return value.toDate().getTime();
+  }
+
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+
+  const parsed = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatDashboardDate(value) {
+  const millis = Number(value);
+  if (!Number.isFinite(millis) || millis <= 0) {
+    return "No date";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+  }).format(new Date(millis));
 }
 
 function formatPlayedDate(value) {
@@ -1721,11 +1759,19 @@ function bindCourseDetailControls(panelElement) {
   const wishlistButton = panelElement.querySelector("[data-action='toggle-wishlist']");
   if (wishlistButton && wishlistButton.dataset.controlsBound !== "true") {
     wishlistButton.dataset.controlsBound = "true";
-    wishlistButton.addEventListener("click", () => {
+    wishlistButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const currentData = getCourseUserData(wishlistButton.dataset.courseKey);
-      updateCourseUserData(wishlistButton.dataset.courseKey, {
-        wishlist: !currentData.wishlist,
-      });
+      updateCourseUserData(
+        wishlistButton.dataset.courseKey,
+        {
+          wishlist: !currentData.wishlist,
+        },
+        {
+          preservePopup: true,
+        },
+      );
     });
   }
 
@@ -1736,9 +1782,15 @@ function bindCourseDetailControls(panelElement) {
 
     field.dataset.controlsBound = "true";
     field.addEventListener("change", () => {
-      updateCourseUserData(field.dataset.courseKey, {
-        [field.dataset.userField]: field.value,
-      });
+      updateCourseUserData(
+        field.dataset.courseKey,
+        {
+          [field.dataset.userField]: field.value,
+        },
+        {
+          preservePopup: true,
+        },
+      );
     });
   });
 }
@@ -1757,6 +1809,14 @@ async function toggleCoursePlayed(course) {
   } else {
     delete state.played[course.key];
   }
+
+  const changedAt = Date.now();
+  const currentUserData = getCourseUserData(course.key);
+  state.userData[course.key] = {
+    ...currentUserData,
+    createdAtMs: currentUserData.createdAtMs || changedAt,
+    updatedAtMs: changedAt,
+  };
 
   updateMarkerAppearance(course);
   updateStats();
@@ -1785,16 +1845,22 @@ async function toggleCoursePlayed(course) {
   }
 }
 
-function updateMarkerAppearance(course) {
+function updateMarkerAppearance(course, options = {}) {
   const marker = state.markers.get(course.key);
   if (!marker) {
     return;
   }
 
+  const popup = marker.getPopup();
+  const isPopupOpen = popup?.isOpen();
   marker.setStyle(markerStyle(course));
-  marker.setPopupContent(buildCourseDetailContent(course));
-  if (marker.getPopup()?.isOpen()) {
-    bindCourseDetailControls(marker.getPopup().getElement());
+  if (options.preserveOpenPopup && isPopupOpen) {
+    syncOpenCoursePopupState(marker, course);
+  } else {
+    marker.setPopupContent(buildCourseDetailContent(course));
+    if (isPopupOpen) {
+      bindCourseDetailControls(popup.getElement());
+    }
   }
 
   const markerElement = marker.getElement();
@@ -1802,6 +1868,54 @@ function updateMarkerAppearance(course) {
     markerElement.classList.toggle("is-played", isCoursePlayed(course.key));
     markerElement.classList.toggle("is-unplayed", !isCoursePlayed(course.key));
     markerElement.classList.toggle("is-wishlist", getCourseUserData(course.key).wishlist);
+  }
+}
+
+function syncOpenCoursePopupState(marker, course) {
+  const popupElement = marker.getPopup()?.getElement();
+  if (!popupElement) {
+    return;
+  }
+
+  const played = isCoursePlayed(course.key);
+  const userData = getCourseUserData(course.key);
+  const status = popupElement.querySelector(".course-detail-status");
+  if (status) {
+    status.textContent = played ? "Played" : "Not played";
+    status.classList.toggle("is-played", played);
+    status.classList.toggle("is-unplayed", !played);
+  }
+
+  const playButton = popupElement.querySelector("[data-action='toggle-played']");
+  if (playButton) {
+    playButton.classList.toggle("is-played", played);
+    playButton.classList.toggle("is-unplayed", !played);
+    const playLabel = playButton.querySelector("[data-action-label]");
+    if (playLabel) {
+      playLabel.textContent = played ? "Mark unplayed" : "Mark played";
+    }
+  }
+
+  const wishlistButton = popupElement.querySelector("[data-action='toggle-wishlist']");
+  if (wishlistButton) {
+    wishlistButton.classList.toggle("is-active", userData.wishlist);
+    const wishlistLabel = wishlistButton.querySelector("[data-action-label]");
+    if (wishlistLabel) {
+      wishlistLabel.textContent = userData.wishlist ? "Remove wishlist" : "Add wishlist";
+    }
+  }
+
+  syncCourseFieldValue(popupElement, "rating", userData.rating);
+  syncCourseFieldValue(popupElement, "condition", userData.condition);
+  syncCourseFieldValue(popupElement, "weather", userData.weather);
+  syncCourseFieldValue(popupElement, "playedDate", userData.playedDate);
+  syncCourseFieldValue(popupElement, "note", userData.note);
+}
+
+function syncCourseFieldValue(container, fieldName, value) {
+  const field = container.querySelector(`[data-user-field="${fieldName}"]`);
+  if (field && field.value !== value) {
+    field.value = value;
   }
 }
 
@@ -1819,23 +1933,29 @@ function refreshCourseDetailViews() {
   });
 }
 
-async function updateCourseUserData(courseKey, updates) {
+async function updateCourseUserData(courseKey, updates, options = {}) {
   if (!requireVerifiedUser("save course notes")) {
     return;
   }
 
   const previousUserData = { ...state.userData };
   const previousPlayed = { ...state.played };
+  const currentUserData = getCourseUserData(courseKey);
+  const changedAt = Date.now();
 
   state.userData[courseKey] = {
-    ...getCourseUserData(courseKey),
+    ...currentUserData,
     ...normalizeCourseUserData(updates),
+    createdAtMs: currentUserData.createdAtMs || changedAt,
+    updatedAtMs: changedAt,
   };
 
   const course = state.courses.find((item) => item.key === courseKey);
   const marker = state.markers.get(courseKey);
   if (course && marker) {
-    updateMarkerAppearance(course);
+    updateMarkerAppearance(course, {
+      preserveOpenPopup: options.preservePopup === true,
+    });
   }
   updateTimeline();
   updateDashboard();
@@ -1844,7 +1964,11 @@ async function updateCourseUserData(courseKey, updates) {
     state.activeFilter === "wishlist" &&
     Object.prototype.hasOwnProperty.call(updates, "wishlist");
   if (shouldRefreshFilteredMarkers) {
-    renderVisibleMarkers();
+    if (options.preservePopup === true && marker?.getPopup()?.isOpen()) {
+      state.pendingMarkerRefreshAfterPopupClose = true;
+    } else {
+      renderVisibleMarkers();
+    }
   }
 
   try {
@@ -1852,11 +1976,14 @@ async function updateCourseUserData(courseKey, updates) {
   } catch (error) {
     state.userData = previousUserData;
     state.played = previousPlayed;
+    state.pendingMarkerRefreshAfterPopupClose = false;
     updateTimeline();
     updateDashboard();
     renderChecklist();
     if (course && marker) {
-      updateMarkerAppearance(course);
+      updateMarkerAppearance(course, {
+        preserveOpenPopup: options.preservePopup === true,
+      });
     }
     if (shouldRefreshFilteredMarkers) {
       renderVisibleMarkers();
@@ -1873,6 +2000,8 @@ function getCourseUserData(courseKey) {
     wishlist: false,
     playedDate: "",
     note: "",
+    createdAtMs: 0,
+    updatedAtMs: 0,
     ...(state.userData[courseKey] || {}),
   };
 }
@@ -1997,7 +2126,7 @@ function updateDashboard() {
   elements.dashboardCompletionBar.style.width = `${percent}%`;
 
   renderDashboardList(elements.bestRatedList, bestRatedDashboardItems(), "No ratings yet");
-  renderDashboardList(elements.recentPlayedList, recentPlayedDashboardItems(), "No played dates yet");
+  renderDashboardList(elements.recentPlayedList, recentPlayedDashboardItems(), "No played courses yet");
   renderDashboardList(elements.regionLeftList, regionLeftDashboardItems(), "No regions yet");
 }
 
@@ -2021,16 +2150,40 @@ function recentPlayedDashboardItems() {
   return state.courses
     .map((course) => ({
       course,
-      playedDate: getCourseUserData(course.key).playedDate,
+      userData: getCourseUserData(course.key),
     }))
-    .filter((item) => isCoursePlayed(item.course.key) && item.playedDate)
-    .sort((a, b) => b.playedDate.localeCompare(a.playedDate))
+    .filter((item) => isCoursePlayed(item.course.key))
+    .map((item) => ({
+      ...item,
+      sortValue: dashboardRecentSortValue(item.userData),
+    }))
+    .sort((a, b) => b.sortValue - a.sortValue || a.course.courseName.localeCompare(b.course.courseName))
     .slice(0, 5)
-    .map(({ course, playedDate }) => ({
+    .map(({ course, userData }) => ({
       key: course.key,
       title: course.courseName,
-      meta: formatPlayedDate(playedDate),
+      meta: dashboardRecentDateLabel(userData),
     }));
+}
+
+function dashboardRecentSortValue(userData) {
+  if (userData.playedDate) {
+    return new Date(`${userData.playedDate}T00:00:00`).getTime();
+  }
+
+  return userData.updatedAtMs || userData.createdAtMs || 0;
+}
+
+function dashboardRecentDateLabel(userData) {
+  if (userData.playedDate) {
+    return formatPlayedDate(userData.playedDate);
+  }
+
+  if (userData.updatedAtMs || userData.createdAtMs) {
+    return formatDashboardDate(userData.updatedAtMs || userData.createdAtMs);
+  }
+
+  return "No date";
 }
 
 function regionLeftDashboardItems() {
@@ -2158,15 +2311,32 @@ function openCourseFromChecklist(courseKey) {
     return;
   }
 
+  const shouldRefreshAfterPopupClose = !state.markerCluster.hasLayer(marker);
+  if (shouldRefreshAfterPopupClose) {
+    state.markerCluster.addLayer(marker);
+  }
+
+  const openPopup = () => {
+    marker.setPopupContent(buildCourseDetailContent(course));
+    marker.openPopup();
+    if (shouldRefreshAfterPopupClose) {
+      state.pendingMarkerRefreshAfterPopupClose = true;
+    }
+    window.setTimeout(() => bindCourseDetailControls(marker.getPopup()?.getElement()), 0);
+  };
+
+  if (state.markerCluster.zoomToShowLayer) {
+    state.markerCluster.zoomToShowLayer(marker, openPopup);
+    return;
+  }
+
   if (course.hasLocation && Number.isFinite(course.lat) && Number.isFinite(course.lng)) {
     state.map.setView([course.lat, course.lng], Math.max(state.map.getZoom(), 12), {
       animate: true,
     });
   }
 
-  marker.setPopupContent(buildCourseDetailContent(course));
-  marker.openPopup();
-  window.setTimeout(() => bindCourseDetailControls(marker.getPopup()?.getElement()), 0);
+  openPopup();
 }
 
 function regionForCourse(course) {
@@ -2257,7 +2427,7 @@ function buildCourseDetailContent(course) {
         ${lockedAttribute}
       >
         <span class="play-toggle-icon" aria-hidden="true"></span>
-        <span>${toggleLabel}</span>
+        <span data-action-label>${toggleLabel}</span>
       </button>
 
       <button
@@ -2268,7 +2438,7 @@ function buildCourseDetailContent(course) {
         ${lockedAttribute}
       >
         <span class="wishlist-toggle-icon" aria-hidden="true"></span>
-        <span>${wishlistLabel}</span>
+        <span data-action-label>${wishlistLabel}</span>
       </button>
 
       <section class="detail-section" aria-label="Contact details">
