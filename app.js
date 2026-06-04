@@ -699,7 +699,11 @@ function setAccountNotice(message, tone = "info", timeout = AUTH_NOTICE_TIMEOUT_
 }
 
 function isVerifiedUser(user = state.authUser) {
-  return Boolean(user?.emailVerified);
+  return Boolean(user?.emailVerified || isGoogleUser(user));
+}
+
+function isGoogleUser(user = state.authUser) {
+  return Boolean(user?.providerData?.some((provider) => provider.providerId === "google.com"));
 }
 
 function canUsePrivateFeatures() {
@@ -1199,6 +1203,26 @@ function authErrorMessage(error) {
     return "Enter a valid email address.";
   }
 
+  if (code === "auth/unauthorized-continue-uri") {
+    return "Firebase rejected the verification link domain. Add this site to Auth authorized domains.";
+  }
+
+  if (code === "auth/invalid-continue-uri" || code === "auth/missing-continue-uri") {
+    return "Firebase rejected the verification link URL.";
+  }
+
+  if (code === "auth/too-many-requests") {
+    return "Firebase is rate-limiting this email. Wait before trying again.";
+  }
+
+  if (code === "auth/network-request-failed") {
+    return "Network error while asking Firebase to send the email.";
+  }
+
+  if (code === "auth/operation-not-allowed") {
+    return "Email/password authentication is not enabled in Firebase.";
+  }
+
   if (
     code === "auth/invalid-credential" ||
     code === "auth/user-not-found" ||
@@ -1211,7 +1235,7 @@ function authErrorMessage(error) {
     return "You do not have permission to make that change.";
   }
 
-  return error?.message || "Something went wrong.";
+  return code ? `${code}: ${error?.message || "Something went wrong."}` : error?.message || "Something went wrong.";
 }
 
 function applyInitialSidebarState() {
