@@ -8,6 +8,7 @@
       content="Interactive Leaflet map for tracking played golf courses in Iceland."
     />
     <title>Iceland Golf Course Tracker</title>
+    <link rel="icon" href="public/golfkortari.ico" sizes="any" />
 
     <!-- Match the typography used on snorribjarkason.com. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -136,6 +137,46 @@
           </article>
         </section>
 
+        <section class="dashboard-panel" aria-label="Personal dashboard">
+          <header class="panel-header">
+            <h2>Dashboard</h2>
+            <span id="dashboardSummary">0 / 0</span>
+          </header>
+
+          <div class="dashboard-completion">
+            <div>
+              <strong id="dashboardCompletion">0%</strong>
+              <span id="dashboardCompletionText">No progress yet</span>
+            </div>
+            <div class="dashboard-progress-track" aria-hidden="true">
+              <span id="dashboardCompletionBar"></span>
+            </div>
+          </div>
+
+          <div class="dashboard-lists">
+            <section class="dashboard-list" aria-label="Best-rated courses">
+              <h3>Best rated</h3>
+              <ol id="bestRatedList">
+                <li>No ratings yet</li>
+              </ol>
+            </section>
+
+            <section class="dashboard-list" aria-label="Recent played courses">
+              <h3>Recent played</h3>
+              <ol id="recentPlayedList">
+                <li>No played dates yet</li>
+              </ol>
+            </section>
+
+            <section class="dashboard-list is-full" aria-label="Courses left by region">
+              <h3>Left by region</h3>
+              <ol id="regionLeftList">
+                <li>No regions yet</li>
+              </ol>
+            </section>
+          </div>
+        </section>
+
         <section class="controls" aria-label="Course search and filters">
           <label class="search-label" for="courseSearch">Search</label>
           <input
@@ -161,6 +202,16 @@
             </button>
           </div>
 
+        </section>
+
+        <section class="checklist-panel" aria-label="Course checklist">
+          <header class="panel-header">
+            <h2>Checklist</h2>
+            <span id="checklistCount">0</span>
+          </header>
+          <div class="checklist-list" id="courseChecklist" role="list">
+            <p class="empty-checklist">No courses loaded</p>
+          </div>
         </section>
 
         <section class="timeline-panel" aria-label="Played course timeline">

@@ -121,8 +121,17 @@ function cacheElements() {
   elements.totalCourses = document.getElementById("totalCourses");
   elements.playedCourses = document.getElementById("playedCourses");
   elements.completionPercent = document.getElementById("completionPercent");
+  elements.dashboardSummary = document.getElementById("dashboardSummary");
+  elements.dashboardCompletion = document.getElementById("dashboardCompletion");
+  elements.dashboardCompletionText = document.getElementById("dashboardCompletionText");
+  elements.dashboardCompletionBar = document.getElementById("dashboardCompletionBar");
+  elements.bestRatedList = document.getElementById("bestRatedList");
+  elements.recentPlayedList = document.getElementById("recentPlayedList");
+  elements.regionLeftList = document.getElementById("regionLeftList");
   elements.courseSearch = document.getElementById("courseSearch");
   elements.filterButtons = Array.from(document.querySelectorAll(".filter-button"));
+  elements.checklistCount = document.getElementById("checklistCount");
+  elements.courseChecklist = document.getElementById("courseChecklist");
   elements.timelineCount = document.getElementById("timelineCount");
   elements.timelineList = document.getElementById("timelineList");
   elements.footerTotal = document.getElementById("footerTotal");
@@ -284,6 +293,24 @@ function bindUiEvents() {
   elements.courseSearch.addEventListener("input", (event) => {
     state.searchTerm = event.target.value.trim().toLowerCase();
     renderVisibleMarkers();
+  });
+
+  elements.courseChecklist.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-checklist-course-key]");
+    if (!item) {
+      return;
+    }
+
+    openCourseFromChecklist(item.dataset.checklistCourseKey);
+  });
+
+  [elements.bestRatedList, elements.recentPlayedList].forEach((listElement) => {
+    listElement.addEventListener("click", (event) => {
+      const item = event.target.closest("[data-dashboard-course-key]");
+      if (item) {
+        openCourseFromChecklist(item.dataset.dashboardCourseKey);
+      }
+    });
   });
 
   elements.filterButtons.forEach((button) => {
@@ -1529,6 +1556,7 @@ function resolveCourseLocations() {
     }
 
     fitMapToMappedCourses();
+    updateStats();
     updateFooter();
     updateLoading("Coordinates resolved", 100);
   } catch (error) {
@@ -1810,6 +1838,8 @@ async function updateCourseUserData(courseKey, updates) {
     updateMarkerAppearance(course);
   }
   updateTimeline();
+  updateDashboard();
+  renderChecklist();
   const shouldRefreshFilteredMarkers =
     state.activeFilter === "wishlist" &&
     Object.prototype.hasOwnProperty.call(updates, "wishlist");
@@ -1823,6 +1853,8 @@ async function updateCourseUserData(courseKey, updates) {
     state.userData = previousUserData;
     state.played = previousPlayed;
     updateTimeline();
+    updateDashboard();
+    renderChecklist();
     if (course && marker) {
       updateMarkerAppearance(course);
     }
@@ -1943,6 +1975,106 @@ function updateStats() {
   elements.playedCourses.textContent = String(played);
   elements.completionPercent.textContent = `${percent}%`;
   updateTimeline();
+  updateDashboard();
+  renderChecklist();
+}
+
+function updateDashboard() {
+  if (!elements.dashboardSummary) {
+    return;
+  }
+
+  const total = state.courses.length;
+  const playedCourses = state.courses.filter((course) => isCoursePlayed(course.key));
+  const played = playedCourses.length;
+  const percent = total ? Math.round((played / total) * 100) : 0;
+
+  elements.dashboardSummary.textContent = `${played} / ${total}`;
+  elements.dashboardCompletion.textContent = `${percent}%`;
+  elements.dashboardCompletionText.textContent = total
+    ? `${played} played, ${Math.max(total - played, 0)} left`
+    : "No courses loaded";
+  elements.dashboardCompletionBar.style.width = `${percent}%`;
+
+  renderDashboardList(elements.bestRatedList, bestRatedDashboardItems(), "No ratings yet");
+  renderDashboardList(elements.recentPlayedList, recentPlayedDashboardItems(), "No played dates yet");
+  renderDashboardList(elements.regionLeftList, regionLeftDashboardItems(), "No regions yet");
+}
+
+function bestRatedDashboardItems() {
+  return state.courses
+    .map((course) => ({
+      course,
+      rating: Number.parseInt(getCourseUserData(course.key).rating, 10),
+    }))
+    .filter((item) => Number.isFinite(item.rating))
+    .sort((a, b) => b.rating - a.rating || a.course.courseName.localeCompare(b.course.courseName))
+    .slice(0, 5)
+    .map(({ course, rating }) => ({
+      key: course.key,
+      title: course.courseName,
+      meta: `${rating}/10`,
+    }));
+}
+
+function recentPlayedDashboardItems() {
+  return state.courses
+    .map((course) => ({
+      course,
+      playedDate: getCourseUserData(course.key).playedDate,
+    }))
+    .filter((item) => isCoursePlayed(item.course.key) && item.playedDate)
+    .sort((a, b) => b.playedDate.localeCompare(a.playedDate))
+    .slice(0, 5)
+    .map(({ course, playedDate }) => ({
+      key: course.key,
+      title: course.courseName,
+      meta: formatPlayedDate(playedDate),
+    }));
+}
+
+function regionLeftDashboardItems() {
+  const regionCounts = state.courses.reduce((counts, course) => {
+    if (isCoursePlayed(course.key)) {
+      return counts;
+    }
+
+    const region = regionForCourse(course);
+    counts.set(region, (counts.get(region) || 0) + 1);
+    return counts;
+  }, new Map());
+
+  return Array.from(regionCounts, ([title, count]) => ({
+    key: "",
+    title,
+    meta: `${count} left`,
+    count,
+  }))
+    .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title))
+    .slice(0, 7);
+}
+
+function renderDashboardList(element, items, emptyText) {
+  if (!element) {
+    return;
+  }
+
+  if (!items.length) {
+    element.innerHTML = `<li>${escapeHtml(emptyText)}</li>`;
+    return;
+  }
+
+  element.innerHTML = items
+    .map((item) => {
+      const keyAttribute = item.key ? ` data-dashboard-course-key="${escapeAttribute(item.key)}"` : "";
+      return `
+        <li${keyAttribute}>
+          <span>${escapeHtml(item.title)}</span>
+          <strong>${escapeHtml(item.meta)}</strong>
+        </li>
+      `;
+    })
+    .join("");
 }
 
 function updateTimeline() {
@@ -1977,6 +2109,99 @@ function updateTimeline() {
       `,
     )
     .join("");
+}
+
+function renderChecklist() {
+  if (!elements.courseChecklist || !elements.checklistCount) {
+    return;
+  }
+
+  const matchingCourses = state.courses.filter(courseMatchesCurrentView);
+  elements.checklistCount.textContent = String(matchingCourses.length);
+
+  if (!matchingCourses.length) {
+    elements.courseChecklist.innerHTML = '<p class="empty-checklist">No matching courses</p>';
+    return;
+  }
+
+  elements.courseChecklist.innerHTML = matchingCourses
+    .slice(0, 120)
+    .map(checklistItemMarkup)
+    .join("");
+}
+
+function checklistItemMarkup(course) {
+  const userData = getCourseUserData(course.key);
+  const played = isCoursePlayed(course.key);
+  const status = played ? "Played" : userData.wishlist ? "Wishlist" : "Unplayed";
+  const rating = userData.rating ? `${userData.rating}/10` : "";
+  const town = cleanCell(course.town) || cleanCell(course.location) || regionForCourse(course);
+
+  return `
+    <button
+      class="checklist-item ${played ? "is-played" : userData.wishlist ? "is-wishlist" : ""}"
+      type="button"
+      data-checklist-course-key="${escapeAttribute(course.key)}"
+      role="listitem"
+    >
+      <span class="checklist-status">${escapeHtml(status)}</span>
+      <strong>${escapeHtml(course.courseName)}</strong>
+      <span class="checklist-meta">${escapeHtml([town, rating].filter(Boolean).join(" · "))}</span>
+    </button>
+  `;
+}
+
+function openCourseFromChecklist(courseKey) {
+  const course = state.courses.find((item) => item.key === courseKey);
+  const marker = state.markers.get(courseKey);
+  if (!course || !marker) {
+    return;
+  }
+
+  if (course.hasLocation && Number.isFinite(course.lat) && Number.isFinite(course.lng)) {
+    state.map.setView([course.lat, course.lng], Math.max(state.map.getZoom(), 12), {
+      animate: true,
+    });
+  }
+
+  marker.setPopupContent(buildCourseDetailContent(course));
+  marker.openPopup();
+  window.setTimeout(() => bindCourseDetailControls(marker.getPopup()?.getElement()), 0);
+}
+
+function regionForCourse(course) {
+  const lat = course.lat ?? course.csvLat;
+  const lng = course.lng ?? course.csvLng;
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return "Unmapped";
+  }
+
+  if (lat >= 63.85 && lat <= 64.32 && lng >= -22.35 && lng <= -21.45) {
+    return "Capital";
+  }
+
+  if (lat < 64.45 && lng <= -21.45) {
+    return "Reykjanes";
+  }
+
+  if (lat >= 65.2 && lng <= -21.0) {
+    return "Westfjords";
+  }
+
+  if (lng <= -20.0 && lat >= 64.4) {
+    return "West";
+  }
+
+  if (lat >= 65.0 && lng > -20.0 && lng <= -14.2) {
+    return "North";
+  }
+
+  if (lng > -16.4 && lat >= 64.3) {
+    return "East";
+  }
+
+  return "South";
 }
 
 function updateFooter() {
